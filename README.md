@@ -16,6 +16,7 @@ MCP4Unity is a Unity editor extension. It allows you to expose Unity methods as 
 ## Requirements
 
 - Unity 2021.3 or later
+  - Newtonsoft.Json
 - Node.js 18 or later
 - npm 9 or later
 

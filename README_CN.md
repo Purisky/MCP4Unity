@@ -16,6 +16,7 @@ MCP4Unity是一个Unity编辑器扩展。它允许您将Unity方法作为工具�
 ## 需求
 
 - Unity 2021.3 or later
+  - Newtonsoft.Json
 - Node.js 18 or later
 - npm 9 or later
 
