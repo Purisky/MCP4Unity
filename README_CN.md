@@ -22,6 +22,7 @@ MCP4Unity是一个Unity编辑器扩展。它允许您将Unity方法作为工具�
 ## 快速开始
 
 1.复制`MCP4Unity`文件夹到Unity项目的`Assets`目录下
+
 2.转到Assets目录
 
 ```bash

@@ -22,6 +22,7 @@ MCP4Unity is a Unity editor extension. It allows you to expose Unity methods as 
 ## Quick Start
 
 1. Copy the `MCP4Unity` folder to the `Assets` directory of your Unity project
+
 2. Navigate to the Assets directory
 
 ```bash
