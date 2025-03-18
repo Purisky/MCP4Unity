@@ -27,7 +27,7 @@ MCP4Unity是一个Unity编辑器扩展。它允许您将Unity方法作为工具�
 2.转到Assets目录
 
 ```bash
-cd MCP4Unity/mcp.ts
+cd MCP4Unity/mcp.ts~
 npm install
 npm run build
 ```
@@ -39,7 +39,7 @@ npm run build
   "mcpServers": {
     "mcp4unity": {
       "command": "node",
-      "args": ["[mcp.ts文件夹路径]/build/index.js"],
+      "args": ["[mcp.ts~文件夹路径]/build/index.js"],
       "env": {},
       "disabled": false,
       "autoApprove": []

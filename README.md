@@ -27,7 +27,7 @@ MCP4Unity is a Unity editor extension. It allows you to expose Unity methods as 
 2. Navigate to the Assets directory
 
 ```bash
-cd MCP4Unity/mcp.ts
+cd MCP4Unity/mcp.ts~
 npm install
 npm run build
 ```
@@ -39,7 +39,7 @@ npm run build
   "mcpServers": {
     "mcp4unity": {
       "command": "node",
-      "args": ["[mcp.ts folder path]/build/index.js"],
+      "args": ["[mcp.ts~ folder path]/build/index.js"],
       "env": {},
       "disabled": false,
       "autoApprove": []
