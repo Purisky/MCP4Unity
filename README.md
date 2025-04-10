@@ -17,32 +17,18 @@ MCP4Unity is a Unity editor extension. It allows you to expose Unity methods as 
 
 - Unity 2021.3 or later
   - Newtonsoft.Json
-- Node.js 18 or later
-- npm 9 or later
 
 ## Quick Start
 
 1. Copy the `MCP4Unity` folder to the `Assets` directory of your Unity project
 
-2. Navigate to the Assets directory
-
-```bash
-cd MCP4Unity/mcp.ts~
-npm install
-npm run build
-```
-
-3. JSON configuration
+2. JSON configuration
 
 ```json
 {
   "mcpServers": {
     "mcp4unity": {
-      "command": "node",
-      "args": ["[mcp.ts~ folder path]/build/index.js"],
-      "env": {},
-      "disabled": false,
-      "autoApprove": []
+      "command": "[MCPConsole~ folder path]/MCPConsole.exe",
     },
   }
 }
@@ -91,5 +77,4 @@ public static string[] Get_All_GameObject_in_Hierarchy([Tool("If true, only top-
 ## Technical Details
 
 - Based on Model Context Protocol SDK
-- Developed using C# and TypeScript
 - Automatically discovers and loads tools from all assemblies referencing MCP4Unity

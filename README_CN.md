@@ -17,32 +17,18 @@ MCP4Unity是一个Unity编辑器扩展。它允许您将Unity方法作为工具�
 
 - Unity 2021.3 or later
   - Newtonsoft.Json
-- Node.js 18 or later
-- npm 9 or later
 
 ## 快速开始
 
 1.复制`MCP4Unity`文件夹到Unity项目的`Assets`目录下
 
-2.转到Assets目录
-
-```bash
-cd MCP4Unity/mcp.ts~
-npm install
-npm run build
-```
-
-3.json配置
+2.json配置
 
 ```json
 {
   "mcpServers": {
     "mcp4unity": {
-      "command": "node",
-      "args": ["[mcp.ts~文件夹路径]/build/index.js"],
-      "env": {},
-      "disabled": false,
-      "autoApprove": []
+      "command": "[MCPConsole~文件夹路径]/MCPConsole.exe",
     },
   }
 }
@@ -93,5 +79,4 @@ public static string[] Get_All_GameObject_in_Hierarchy([Tool("If true, only top-
 ## 技术细节
 
 - 基于Model Context Protocol SDK
-- 使用C#和TypeScript开发
 - 自动发现并加载所有引用MCP4Unity的程序集中的工具
