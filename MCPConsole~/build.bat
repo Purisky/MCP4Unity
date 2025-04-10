@@ -37,6 +37,6 @@ echo Executable location: %OUTPUT_DIR%\MCPConsole.exe
 echo ==================================
 
 :: Open output directory
-explorer "%OUTPUT_DIR%"
+:: explorer "%OUTPUT_DIR%"
 
 exit /b 0

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Threading;
@@ -7,6 +8,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEngine;
+using Debug = UnityEngine.Debug;
 
 namespace MCP4Unity.Editor
 {
@@ -19,15 +21,85 @@ namespace MCP4Unity.Editor
         HttpListener HttpListener;
 
         public static Action OnStateChange;
+        private const string MCPConsoleFolderName = "Assets/MCP4Unity/MCPConsole~";
+        private const string MCPConsoleExeName = "MCPConsole.exe";
+        private const string BuildBatName = "build.bat";
 
+        static JsonSerializerSettings SerializerSettings = new()
+        {
+            NullValueHandling = NullValueHandling.Ignore,
+        };
         static MCPService()
         {
+            // 检查MCPConsole.exe是否存在，如果不存在则运行build.bat
+            CheckAndBuildMCPConsole();
+            
             if (EditorPrefs.GetBool("MCP4Unity_Auto_Start", true))
             {
                 Inst.Start();
             }
         }
 
+        public static void CheckAndBuildMCPConsole()
+        {
+            try
+            {
+                // 获取MCPConsole路径（相对于项目根目录）
+                string projectPath = Path.GetDirectoryName(Application.dataPath);
+                string mcpConsolePath = Path.Combine(projectPath, MCPConsoleFolderName);
+                string mcpConsoleExePath = Path.Combine(mcpConsolePath, MCPConsoleExeName);
+                string buildBatPath = Path.Combine(mcpConsolePath, BuildBatName);
+                
+                // 检查文件夹是否存在
+                if (!Directory.Exists(mcpConsolePath))
+                {
+                    UnityEngine.Debug.LogWarning($"MCPConsole folder not found at: {mcpConsolePath}");
+                    return;
+                }
+                
+                // 检查可执行文件是否存在
+                if (!File.Exists(mcpConsoleExePath))
+                {
+                    UnityEngine.Debug.Log($"MCPConsole.exe not found. Running build script...");
+                    
+                    // 检查build.bat是否存在
+                    if (!File.Exists(buildBatPath))
+                    {
+                        UnityEngine.Debug.LogError($"Build script not found at: {buildBatPath}");
+                        return;
+                    }
+                    
+                    // 运行build.bat
+                    ProcessStartInfo psi = new ()
+                    {
+                        FileName = buildBatPath,
+                        WorkingDirectory = mcpConsolePath,
+                        UseShellExecute = true,
+                        CreateNoWindow = true,
+                        WindowStyle = ProcessWindowStyle.Hidden
+                    };
+                    
+                    using (Process process = Process.Start(psi))
+                    {
+                        process.WaitForExit();
+                        
+                        // 检查编译结果
+                        if (File.Exists(mcpConsoleExePath))
+                        {
+                            UnityEngine.Debug.Log("MCPConsole.exe successfully built.");
+                        }
+                        else
+                        {
+                            UnityEngine.Debug.LogError("Failed to build MCPConsole.exe.");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"Error checking/building MCPConsole: {ex.Message}");
+            }
+        }
         public async void Start()
         {
             _cancellationTokenSource = new CancellationTokenSource();
@@ -78,7 +150,7 @@ namespace MCP4Unity.Editor
                     requestBody = await reader.ReadToEndAsync();
                 }
                 
-                string responseContent =JsonConvert.SerializeObject(ProcessRequest(requestBody));
+                string responseContent =JsonConvert.SerializeObject(ProcessRequest(requestBody), SerializerSettings);
                 
                 context.Response.Headers.Add("Access-Control-Allow-Origin", "*");
                 context.Response.Headers.Add("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -106,6 +178,7 @@ namespace MCP4Unity.Editor
             {
                 MCPRequest request = JsonConvert.DeserializeObject<MCPRequest>(requestBody);
 
+                Debug.Log(request.method);
                 switch (request.method.ToLower())
                 {
                     case "listtools":

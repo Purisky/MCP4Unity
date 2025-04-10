@@ -1,159 +1,160 @@
-using System;
-using System.Net;
+using ModelContextProtocol.Protocol.Transport;
+using ModelContextProtocol.Protocol.Types;
+using ModelContextProtocol.Server;
 using System.Text;
-using System.Threading.Tasks;
-using System.Net.Http;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace MCPConsole
 {
     public class Program
     {
         private static readonly HttpClient _httpClient = new HttpClient();
-        private static HttpListener _httpListener;
         private static readonly string _unityMcpUrl = "http://localhost:8080/mcp/"; // Fixed Unity MCP service URL
+        
+        // 通过HTTP调用Unity中的MCPService
+        private static async Task<JsonNode> CallUnityMcpServiceAsync(string method, object parameters)
+        {
+            try
+            {
+                var request = new 
+                {
+                    method = method,
+                    @params = parameters != null ? JsonSerializer.Serialize(parameters) : null
+                };
+                
+                var content = new StringContent(JsonSerializer.Serialize(request), Encoding.UTF8, "application/json");
+                HttpResponseMessage response = await _httpClient.PostAsync(_unityMcpUrl, content);
+                
+                response.EnsureSuccessStatusCode();
+                
+                string responseBody = await response.Content.ReadAsStringAsync();
+                var mcpResponse = JsonSerializer.Deserialize<McpResponse>(responseBody, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                
+                if (mcpResponse.Success)
+                {
+                    return JsonNode.Parse(mcpResponse.Result.ToString());
+                }
+                else
+                {
+                    Console.Error.WriteLine($"Error from Unity MCP service: {mcpResponse.Error}");
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error calling Unity MCP service: {ex.Message}");
+                return null;
+            }
+        }
         
         public static async Task Main(string[] args)
         {
             Console.WriteLine("MCP service starting...");
-            
-            // Port must be manually specified, default value not allowed
-            if (args.Length < 1 || !int.TryParse(args[0], out int localPort))
+            McpServerOptions options = new()
             {
-                Console.WriteLine("Error: You must specify a listening port.");
-                Console.WriteLine("Usage: MCPConsole.exe <port>");
-                Console.WriteLine("Example: MCPConsole.exe 9090");
-                return;
-            }
-            
-            try
-            {
-                await StartServer(localPort);
-                Console.WriteLine($"MCP service started, listening on port: {localPort}, connected to Unity MCP: {_unityMcpUrl}");
-            }
-            catch (HttpListenerException ex)
-            {
-                Console.WriteLine($"Failed to start service: {ex.Message}");
-                if (ex.ErrorCode == 183) // Address already in use
+                ServerInfo = new() { Name = "MCP4Unity", Version = "1.0.0" },
+                Capabilities = new()
                 {
-                    Console.WriteLine($"Port {localPort} is already in use, please specify another port.");
-                }
-                return;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error occurred when starting service: {ex.Message}");
-                return;
-            }
-            
-            // Keep the program running
-            await Task.Delay(-1);
-        }
-        
-        private static async Task StartServer(int port)
-        {
-            _httpListener = new HttpListener();
-            _httpListener.Prefixes.Add($"http://localhost:{port}/mcp/");
-            _httpListener.Start(); // This will throw an exception if the port is already in use
-            
-            // Start asynchronous request processing
-            _ = Task.Run(async () =>
-            {
-                while (true)
-                {
-                    try
+                    Tools = new()
                     {
-                        var context = await _httpListener.GetContextAsync();
-                        _ = HandleHttpRequest(context);
+                        ListToolsHandler = async (request, cancellationToken) =>
+                        {
+                            try
+                            {
+                                Console.WriteLine($"ListToolsHandler");
+                                // 调用Unity中的listtools方法获取工具列表
+                                JsonNode result = await CallUnityMcpServiceAsync("listtools", null);
+                                Console.WriteLine($"ListToolsHandler result: {result}");
+                                if (result != null && result["tools"] != null && result["tools"] is JsonArray toolsArray)
+                                {
+                                    List<Tool> tools = [];
+                                    foreach (JsonNode node in toolsArray)
+                                    {
+                                        tools.Add(new()
+                                        {
+                                            Name = node["name"]?.GetValue<string>(),
+                                            Description = node["description"]?.GetValue<string>(),
+                                            InputSchema = JsonDocument.Parse(node["inputSchema"].ToJsonString()).RootElement,
+                                        });
+                                    }
+
+                                    return new ListToolsResult
+                                    {
+                                        Tools = tools
+                                    };
+                                }
+                                
+                                // 如果无法获取工具列表，返回空数组
+                                return new ListToolsResult
+                                {
+                                    Tools = []
+                                };
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.Error.WriteLine($"Error in ListToolsHandler: {ex.Message}");
+                                return new ListToolsResult
+                                {
+                                    Tools = []
+                                };
+                            }
+                        },
+
+                        CallToolHandler = async (request, cancellationToken) =>
+                        {
+                            try
+                            {
+                                Console.WriteLine($"Calling tool: {request.Params.Name}");
+                                
+                                // 调用Unity中的calltool方法执行工具
+                                var parameters = new 
+                                {
+                                    name = request.Params.Name,
+                                    arguments = request.Params.Arguments
+                                };
+                                
+                                JsonNode result = await CallUnityMcpServiceAsync("callTool", parameters);
+                                
+                                if (result != null)
+                                {
+                                    return new CallToolResponse
+                                    {
+                                        Content = [new() { Type = "text", Text = result.ToString() }]
+                                    };
+                                }
+
+                                // 如果调用失败，返回错误信息
+                                return new CallToolResponse
+                                {
+                                    IsError = true,
+                                    Content = [new() { Type = "text", Text = $"CallTool {request.Params.Name} failed" }]
+                                };
+                            }
+                            catch (Exception ex)
+                            {
+                                return new CallToolResponse
+                                {
+                                    IsError = true,
+                                    Content = [new() { Type = "text", Text = $"CallTool {request.Params.Name} error: {ex.Message}" }]
+                                };
+                            }
+                        },
                     }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Error occurred when processing HTTP request: {ex.Message}");
-                    }
-                }
-            });
+                },
+            };
+           
+            await using IMcpServer server = McpServerFactory.Create(new StdioServerTransport("MCP4Unity"), options);
+
+            await server.RunAsync();
         }
-        
-        private static async Task HandleHttpRequest(HttpListenerContext context)
-        {
-            try
-            {
-                // Handle OPTIONS requests (CORS preflight requests)
-                if (context.Request.HttpMethod == "OPTIONS")
-                {
-                    HandleCorsRequest(context);
-                    return;
-                }
-                
-                // Read request content
-                string requestBody = "";
-                using (var reader = new System.IO.StreamReader(context.Request.InputStream, context.Request.ContentEncoding))
-                {
-                    requestBody = await reader.ReadToEndAsync();
-                }
-                
-                // Process request and generate response
-                string responseContent = JsonConvert.SerializeObject(await ProcessRequest(requestBody));
-                
-                // Set CORS response headers
-                HandleCorsRequest(context);
-                
-                // Send response
-                byte[] buffer = Encoding.UTF8.GetBytes(responseContent);
-                context.Response.ContentLength64 = buffer.Length;
-                context.Response.ContentType = "application/json";
-                await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error occurred when processing HTTP request: {ex.Message}");
-                context.Response.StatusCode = 500;
-            }
-            finally
-            {
-                context.Response.Close();
-            }
-        }
-        
-        private static void HandleCorsRequest(HttpListenerContext context)
-        {
-            // Set CORS response headers
-            context.Response.Headers.Add("Access-Control-Allow-Origin", "*");
-            context.Response.Headers.Add("Access-Control-Allow-Methods", "POST, OPTIONS");
-            context.Response.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
-        }
-        
-        private static async Task<MCPResponse> ProcessRequest(string requestBody)
-        {
-            try
-            {
-                MCPRequest request = JsonConvert.DeserializeObject<MCPRequest>(requestBody);
-                
-                // Forward request to Unity's MCP service
-                var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
-                
-                try
-                {
-                    var response = await _httpClient.PostAsync(_unityMcpUrl, content);
-                    response.EnsureSuccessStatusCode();
-                    
-                    var responseContent = await response.Content.ReadAsStringAsync();
-                    var mcpResponse = JsonConvert.DeserializeObject<MCPResponse>(responseContent);
-                    
-                    return mcpResponse;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Cannot connect to Unity's MCP service: {ex.Message}");
-                    return MCPResponse.Error("Cannot connect to Unity's MCP service. Please make sure Unity is running and the MCP4Unity service is started.");
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error occurred when processing request: {ex.Message}");
-                return MCPResponse.Error(ex);
-            }
-        }
+    }
+    
+    // 用于解析Unity MCP服务响应的类
+    public class McpResponse
+    {
+        public bool Success { get; set; }
+        public JsonElement Result { get; set; }
+        public string Error { get; set; }
     }
 }

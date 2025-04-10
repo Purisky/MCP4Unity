@@ -22,6 +22,10 @@ namespace MCP4Unity.Editor
         }
         public static string SharpTypeToTypeScriptType(Type type)
         {
+            if (type == typeof(int))
+            {
+                return "integer";
+            }
             if (type == typeof(int) || type == typeof(float) || type == typeof(double) || type == typeof(decimal))
             {
                 return "number";
@@ -44,7 +48,7 @@ namespace MCP4Unity.Editor
             }
             else if (type == typeof(object))
             {
-                return "any";
+                return "object";
             }
             else if (type.IsGenericType)
             {
@@ -60,7 +64,7 @@ namespace MCP4Unity.Editor
                 Type elementType = type.GetElementType();
                 return $"{SharpTypeToTypeScriptType(elementType)}[]";
             }
-            return "any";
+            return "object";
         }
     }
 
