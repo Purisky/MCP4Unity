@@ -4,7 +4,7 @@ echo Building MCPConsole...
 echo ==================================
 
 :: Set output directory
-set OUTPUT_DIR=..\MCPConsole
+set OUTPUT_DIR=..\MCPConsole~
 
 :: Ensure output directory exists
 if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%"
