@@ -3,29 +3,30 @@ echo ==================================
 echo Building MCPConsole...
 echo ==================================
 
-:: Set output directory
 set OUTPUT_DIR=..\MCPConsole~
 
-:: Ensure output directory exists
 if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%"
 
-:: Clean previous builds
+echo Deleting old executable files...
+del /f /q "%OUTPUT_DIR%\MCPConsole.exe" "%OUTPUT_DIR%\MCPConsole.pdb" 2>nul
+if exist "%OUTPUT_DIR%\MCPConsole.exe" (
+    echo File is locked, terminating process...
+    taskkill /f /im MCPConsole.exe 2>nul
+    del /f /q "%OUTPUT_DIR%\MCPConsole.exe" "%OUTPUT_DIR%\MCPConsole.pdb" 2>nul
+)
+
 echo Cleaning previous builds...
 dotnet clean -c Release
 
-:: Restore package dependencies
 echo Restoring NuGet packages...
 dotnet restore
 
-:: Build the project
 echo Building project...
-dotnet build -c Release
+dotnet build -c Release /p:DebugType=None /p:DebugSymbols=false
 
-:: Publish the project (single file, self-contained)
 echo Publishing standalone executable...
-dotnet publish -c Release -r win-x64 --self-contained false /p:PublishSingleFile=true /p:PublishReadyToRun=true -o "%OUTPUT_DIR%"
+dotnet publish -c Release -r win-x64 --self-contained false /p:PublishSingleFile=true /p:PublishReadyToRun=true /p:DebugType=None /p:DebugSymbols=false -o "%OUTPUT_DIR%"
 
-:: Check build result
 if %ERRORLEVEL% NEQ 0 (
     echo Build failed, please check error messages.
     exit /b %ERRORLEVEL%
@@ -35,8 +36,5 @@ echo ==================================
 echo Build completed successfully!
 echo Executable location: %OUTPUT_DIR%\MCPConsole.exe
 echo ==================================
-
-:: Open output directory
-:: explorer "%OUTPUT_DIR%"
 
 exit /b 0

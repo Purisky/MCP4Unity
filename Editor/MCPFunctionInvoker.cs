@@ -13,6 +13,7 @@ namespace MCP4Unity.Editor
     {
         public static Dictionary<string, MCPTool> Tools = new();
 
+
         static MCPFunctionInvoker()
         {
             LoadMethods();
@@ -31,7 +32,7 @@ namespace MCP4Unity.Editor
         }
         static void HandleMethod(MethodInfo methodInfo)
         {
-            MCPAttribute att = methodInfo.GetCustomAttribute<MCPAttribute>();
+            DescAttribute att = methodInfo.GetCustomAttribute<DescAttribute>();
             if (att is ToolAttribute toolAttribute)
             {
                 var mcpTool = new MCPTool(methodInfo, toolAttribute);
@@ -71,7 +72,6 @@ namespace MCP4Unity.Editor
                 tools = Tools.Values.ToList()
             };
         }
-
         public static HashSet<Assembly> GetDependentAssemblies()
         {
             Assembly targetAssembly = typeof(ToolAttribute).Assembly;

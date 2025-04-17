@@ -47,13 +47,13 @@ MCP4Unity是一个Unity编辑器扩展。它允许您将Unity方法作为工具�
 
 ```csharp
 [Tool("Echo描述")]
-public static string Echo_Tool([Tool("stringArg描述")] string stringArg, [Tool("intArg描述")] int intArg)
+public static string Echo_Tool([Desc("stringArg描述")] string stringArg, [Desc("intArg描述")] int intArg)
 {
     return $"echo:{stringArg},{intArg}";
 }
 
 [Tool("Retrieves the names of all GameObjects in the hierarchy")]
-public static string[] Get_All_GameObject_in_Hierarchy([Tool("If true, only top-level GameObjects are returned; otherwise, all GameObjects are returned.")] bool top)
+public static string[] Get_All_GameObject_in_Hierarchy([Desc("If true, only top-level GameObjects are returned; otherwise, all GameObjects are returned.")] bool top)
 {
     List<string> gameObjectNames = new();
 

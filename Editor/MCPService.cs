@@ -177,8 +177,6 @@ namespace MCP4Unity.Editor
             try
             {
                 MCPRequest request = JsonConvert.DeserializeObject<MCPRequest>(requestBody);
-
-                Debug.Log(request.method);
                 switch (request.method.ToLower())
                 {
                     case "listtools":
@@ -187,6 +185,7 @@ namespace MCP4Unity.Editor
                         ToolArgs toolArgs = JsonConvert.DeserializeObject<ToolArgs>(request.params_);
                         object res = MCPFunctionInvoker.Invoke(toolArgs.name, toolArgs.arguments);
                         return MCPResponse.Success(res);
+
                 }
                 return MCPResponse.Error($"unknown method:{request.method}") ;
             }

@@ -106,15 +106,15 @@ namespace MCP4Unity.Editor
             ParameterInfo[] parameters = methodInfo.GetParameters();
             for (int i = 0; i < parameters.Length; i++)
             {
-                ToolAttribute toolAttribute_ = parameters[i].GetCustomAttribute<ToolAttribute>();
+                DescAttribute descAttribute = parameters[i].GetCustomAttribute<DescAttribute>();
                 Property property = new(parameters[i].Name, parameters[i].ParameterType);
-                if (toolAttribute_ != null)
+                if (descAttribute != null)
                 {
-                    property.description = toolAttribute_.Desc;
+                    property.description = descAttribute.Desc;
                 }
                 inputSchema.properties.Add(parameters[i].Name, property);
             }
-            returns = new("return", methodInfo.ReturnType);
+            returns = new("return", methodInfo.ReturnType) { description = toolAttribute .ReturnDesc};
         }
 
     }

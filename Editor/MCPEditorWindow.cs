@@ -24,6 +24,7 @@ namespace MCP4Unity.Editor
             startBtn.style.height = 30;
             root.Add(startBtn);
             MCPService.OnStateChange += UpdateStartBtn;
+
             UpdateStartBtn();
         }
         void OnClickStart()

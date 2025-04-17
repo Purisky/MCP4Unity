@@ -46,13 +46,13 @@ Example:
 
 ```csharp
 [Tool("Echo description")]
-public static string Echo_Tool([Tool("stringArg description")] string stringArg, [Tool("intArg description")] int intArg)
+public static string Echo_Tool([Desc("stringArg description")] string stringArg, [Desc("intArg description")] int intArg)
 {
     return $"echo:{stringArg},{intArg}";
 }
 
 [Tool("Retrieves the names of all GameObjects in the hierarchy")]
-public static string[] Get_All_GameObject_in_Hierarchy([Tool("If true, only top-level GameObjects are returned; otherwise, all GameObjects are returned.")] bool top)
+public static string[] Get_All_GameObject_in_Hierarchy([Desc("If true, only top-level GameObjects are returned; otherwise, all GameObjects are returned.")] bool top)
 {
     List<string> gameObjectNames = new();
 
