@@ -1,4 +1,4 @@
-using ModelContextProtocol.Protocol.Transport;
+﻿using ModelContextProtocol.Protocol.Transport;
 using ModelContextProtocol.Protocol.Types;
 using ModelContextProtocol.Server;
 using System.Text;
@@ -12,7 +12,7 @@ namespace MCPConsole
 
         public static async Task Main(string[] args)
         {
-            Console.WriteLine("MCP service starting...");
+            //Console.WriteLine("MCP service starting...");
             McpServerOptions options = new()
             {
                 ServerInfo = new() { Name = "MCP4Unity", Version = "1.0.0" },
@@ -30,7 +30,7 @@ namespace MCPConsole
         #region Http=>Unity
         private static readonly HttpClient _httpClient = new HttpClient();
         private static readonly string _unityMcpUrl = "http://localhost:8080/mcp/";
-        static async Task<JsonNode> CallUnityMcpServiceAsync(string method, object parameters)
+        static async Task<string> CallUnityMcpServiceAsync(string method, object parameters)
         {
             try
             {
@@ -50,7 +50,7 @@ namespace MCPConsole
 
                 if (mcpResponse.Success)
                 {
-                    return JsonNode.Parse(mcpResponse.Result.ToString());
+                    return mcpResponse.Result.ToString();
                 }
                 else
                 {
@@ -81,10 +81,10 @@ namespace MCPConsole
                 {
                     try
                     {
-                        JsonNode result = await CallUnityMcpServiceAsync("listtools", null);
+                        string result = await CallUnityMcpServiceAsync("listtools", null);
                         if (result != null)
                         {
-                            return result.Deserialize<ListToolsResult>();
+                            return JsonSerializer.Deserialize<ListToolsResult>(result);
                         }
                     }
                     catch (Exception ex)
@@ -109,13 +109,13 @@ namespace MCPConsole
                             arguments = request.Params.Arguments
                         };
 
-                        JsonNode result = await CallUnityMcpServiceAsync("callTool", parameters);
+                        string result = await CallUnityMcpServiceAsync("callTool", parameters);
 
                         if (result != null)
                         {
                             return new CallToolResponse
                             {
-                                Content = [new() { Type = "text", Text = result.ToString() }]
+                                Content = [new() { Type = "text", Text = result }]
                             };
                         }
                         return new CallToolResponse
