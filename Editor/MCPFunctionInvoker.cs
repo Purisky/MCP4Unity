@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -59,7 +59,8 @@ namespace MCP4Unity.Editor
                 catch (Exception e)
                 {
                     Debug.LogError(e);
-                    return e.Message;
+                    //Debug.Log(e.Message);
+                    return e.ToString();
                 }
             }
             return $"Tool {functionName} not found";
