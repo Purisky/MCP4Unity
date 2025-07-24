@@ -529,17 +529,33 @@ namespace MCP4Unity.Editor
                     return;
                 }
                 
+                // Build current parameter values from UI fields
+                var currentParameters = new Dictionary<string, object>();
+                foreach (var paramField in currentToolParameterFields)
+                {
+                    string value = paramField.Value.value;
+                    if (!string.IsNullOrEmpty(value))
+                    {
+                        currentParameters[paramField.Key] = value;
+                    }
+                }
+                
                 // Call the dropdown method to get options
-                var parameters = new object[] { tool.MethodInfo, new Dictionary<string, object>() };
+                var parameters = new object[] { tool.MethodInfo, currentParameters };
                 var result = dropdownMethod.Invoke(null, parameters);
                 
-                if (result is List<string> options && options.Count > 0)
+                // Handle both List<string> and List<(string, string)> return types
+                if (result is List<string> stringOptions && stringOptions.Count > 0)
                 {
-                    ShowDropdownMenu(targetField, options);
+                    ShowDropdownMenuFromStrings(targetField, stringOptions);
+                }
+                else if (result is List<(string, string)> tupleOptions && tupleOptions.Count > 0)
+                {
+                    ShowDropdownMenuFromTuples(targetField, tupleOptions);
                 }
                 else
                 {
-                    Debug.LogWarning($"Dropdown method '{dropdownAttr.MethodName}' returned no options");
+                    Debug.LogWarning($"Dropdown method '{dropdownAttr.MethodName}' returned no options or unsupported type");
                 }
             }
             catch (Exception ex)
@@ -548,7 +564,7 @@ namespace MCP4Unity.Editor
             }
         }
         
-        void ShowDropdownMenu(TextField targetField, List<string> options)
+        void ShowDropdownMenuFromStrings(TextField targetField, List<string> options)
         {
             var menu = new GenericMenu();
             
@@ -557,6 +573,21 @@ namespace MCP4Unity.Editor
                 menu.AddItem(new GUIContent(option), false, () =>
                 {
                     targetField.value = option;
+                });
+            }
+            
+            menu.ShowAsContext();
+        }
+        
+        void ShowDropdownMenuFromTuples(TextField targetField, List<(string value, string display)> options)
+        {
+            var menu = new GenericMenu();
+            
+            foreach (var (value, display) in options)
+            {
+                menu.AddItem(new GUIContent(display), false, () =>
+                {
+                    targetField.value = value;
                 });
             }
             
