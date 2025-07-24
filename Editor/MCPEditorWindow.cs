@@ -19,12 +19,13 @@ namespace MCP4Unity.Editor
         }
         
         Button startBtn;
-        DropdownField toolSelector;
-        VisualElement toolContainer;
+        VisualElement toolListContainer;
+        VisualElement toolDetailsContainer;
         Dictionary<string, TextField> currentToolParameterFields = new Dictionary<string, TextField>();
         Label currentToolResultLabel;
         MCPTool currentSelectedTool;
         List<MCPTool> availableTools = new List<MCPTool>();
+        List<Button> toolButtons = new List<Button>();
 
         public void CreateGUI()
         {
@@ -51,34 +52,82 @@ namespace MCP4Unity.Editor
             separator.style.marginBottom = 10;
             root.Add(separator);
             
-            // Tools section header
-            var toolsHeader = new Label("MCP Tool Selector");
-            toolsHeader.style.fontSize = 16;
-            toolsHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
-            toolsHeader.style.marginBottom = 10;
-            root.Add(toolsHeader);
+            // Two-column layout container
+            var twoColumnContainer = new VisualElement();
+            twoColumnContainer.style.flexDirection = FlexDirection.Row;
+            twoColumnContainer.style.flexGrow = 1;
+            root.Add(twoColumnContainer);
+            
+            // Left column - Tool List
+            var leftColumn = new VisualElement();
+            leftColumn.style.width = new Length(40, LengthUnit.Percent);
+            leftColumn.style.minWidth = 250;
+            leftColumn.style.maxWidth = 400;
+            leftColumn.style.marginRight = 10;
+            twoColumnContainer.Add(leftColumn);
+            
+            // Tool list header
+            var toolListHeader = new VisualElement();
+            toolListHeader.style.flexDirection = FlexDirection.Row;
+            toolListHeader.style.alignItems = Align.Center;
+            toolListHeader.style.marginBottom = 10;
+            leftColumn.Add(toolListHeader);
+            
+            var toolsHeaderLabel = new Label("Available Tools");
+            toolsHeaderLabel.style.fontSize = 16;
+            toolsHeaderLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            toolsHeaderLabel.style.flexGrow = 1;
+            toolListHeader.Add(toolsHeaderLabel);
             
             // Refresh tools button
-            var refreshBtn = new Button(RefreshTools) { text = "Refresh Tools" };
+            var refreshBtn = new Button(RefreshTools) { text = "Refresh" };
+            refreshBtn.style.width = 60;
             refreshBtn.style.height = 25;
-            refreshBtn.style.marginBottom = 10;
-            root.Add(refreshBtn);
+            refreshBtn.tooltip = "Refresh Tools";
+            toolListHeader.Add(refreshBtn);
             
-            // Tool selector dropdown
-            toolSelector = new DropdownField("Select Tool:");
-            toolSelector.style.marginBottom = 15;
-            toolSelector.RegisterValueChangedCallback(OnToolSelected);
-            root.Add(toolSelector);
+            // Tool list scroll view
+            var toolListScrollView = new ScrollView();
+            toolListScrollView.style.flexGrow = 1;
+            toolListScrollView.style.backgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.3f);
+            toolListScrollView.style.borderTopWidth = 1;
+            toolListScrollView.style.borderBottomWidth = 1;
+            toolListScrollView.style.borderLeftWidth = 1;
+            toolListScrollView.style.borderRightWidth = 1;
+            toolListScrollView.style.borderTopColor = new Color(0.3f, 0.3f, 0.3f);
+            toolListScrollView.style.borderBottomColor = new Color(0.3f, 0.3f, 0.3f);
+            toolListScrollView.style.borderLeftColor = new Color(0.3f, 0.3f, 0.3f);
+            toolListScrollView.style.borderRightColor = new Color(0.3f, 0.3f, 0.3f);
+            leftColumn.Add(toolListScrollView);
             
-            // Tool content container
-            toolContainer = new VisualElement();
-            toolContainer.style.flexGrow = 1;
+            toolListContainer = toolListScrollView.contentContainer;
             
-            // Create scroll view for the tool content
-            var scrollView = new ScrollView();
-            scrollView.style.flexGrow = 1;
-            scrollView.Add(toolContainer);
-            root.Add(scrollView);
+            // Vertical separator
+            var verticalSeparator = new VisualElement();
+            verticalSeparator.style.width = 1;
+            verticalSeparator.style.backgroundColor = Color.gray;
+            verticalSeparator.style.marginLeft = 5;
+            verticalSeparator.style.marginRight = 5;
+            twoColumnContainer.Add(verticalSeparator);
+            
+            // Right column - Tool Details
+            var rightColumn = new VisualElement();
+            rightColumn.style.flexGrow = 1;
+            twoColumnContainer.Add(rightColumn);
+            
+            // Tool details header
+            var toolDetailsHeader = new Label("Tool Details");
+            toolDetailsHeader.style.fontSize = 16;
+            toolDetailsHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
+            toolDetailsHeader.style.marginBottom = 10;
+            rightColumn.Add(toolDetailsHeader);
+            
+            // Tool details scroll view
+            var toolDetailsScrollView = new ScrollView();
+            toolDetailsScrollView.style.flexGrow = 1;
+            rightColumn.Add(toolDetailsScrollView);
+            
+            toolDetailsContainer = toolDetailsScrollView.contentContainer;
             
             MCPService.OnStateChange += UpdateStartBtn;
             MCPService.OnStateChange += RefreshTools;
@@ -112,7 +161,9 @@ namespace MCP4Unity.Editor
         void RefreshTools()
         {
             // Clear existing content
-            toolContainer.Clear();
+            toolListContainer.Clear();
+            toolDetailsContainer.Clear();
+            toolButtons.Clear();
             currentToolParameterFields.Clear();
             currentToolResultLabel = null;
             currentSelectedTool = null;
@@ -120,138 +171,199 @@ namespace MCP4Unity.Editor
             
             if (!MCPService.Inst.Running)
             {
-                toolSelector.choices = new List<string> { "MCP Service is not running" };
-                toolSelector.value = "MCP Service is not running";
-                toolSelector.SetEnabled(false);
-                
-                var noServiceLabel = new Label("Start the MCP service to see available tools.");
-                noServiceLabel.style.color = Color.gray;
-                noServiceLabel.style.unityFontStyleAndWeight = FontStyle.Italic;
-                noServiceLabel.style.paddingTop = 20;
-                noServiceLabel.style.paddingLeft = 20;
-                toolContainer.Add(noServiceLabel);
+                ShowServiceNotRunningMessage();
                 return;
             }
             
             var tools = MCPFunctionInvoker.Tools;
             if (tools.Count == 0)
             {
-                toolSelector.choices = new List<string> { "No tools available" };
-                toolSelector.value = "No tools available";
-                toolSelector.SetEnabled(false);
-                
-                var noToolsLabel = new Label("No MCP tools found.");
-                noToolsLabel.style.color = Color.gray;
-                noToolsLabel.style.unityFontStyleAndWeight = FontStyle.Italic;
-                noToolsLabel.style.paddingTop = 20;
-                noToolsLabel.style.paddingLeft = 20;
-                toolContainer.Add(noToolsLabel);
+                ShowNoToolsMessage();
                 return;
             }
             
-            // Populate available tools and create dropdown options
+            // Populate available tools
             availableTools = tools.Values.OrderBy(t => GetToolCategory(t)).ThenBy(t => t.name).ToList();
-            var dropdownOptions = new List<string>();
             
-            // Add "Select a tool..." as first option
-            dropdownOptions.Add("Select a tool...");
+            // Group tools by category
+            var toolsByCategory = availableTools.GroupBy(t => GetToolCategory(t)).OrderBy(g => g.Key);
             
-            // Create detailed dropdown options with category and description
-            foreach (var tool in availableTools)
+            foreach (var categoryGroup in toolsByCategory)
             {
-                string category = GetToolCategory(tool);
-                string displayName = $"[{category}] {tool.name}";
-                if (!string.IsNullOrEmpty(tool.description))
+                // Category header
+                var categoryHeader = new Label(categoryGroup.Key);
+                categoryHeader.style.fontSize = 13;
+                categoryHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
+                categoryHeader.style.color = new Color(0.7f, 0.9f, 1f);
+                categoryHeader.style.marginTop = 5;
+                categoryHeader.style.marginBottom = 5;
+                categoryHeader.style.marginLeft = 5;
+                toolListContainer.Add(categoryHeader);
+                
+                // Tools in category
+                foreach (var tool in categoryGroup.OrderBy(t => t.name))
                 {
-                    // Truncate description if too long
-                    string desc = tool.description.Length > 50 ? 
-                        tool.description.Substring(0, 50) + "..." : 
-                        tool.description;
-                    displayName += $" - {desc}";
+                    var toolButton = CreateToolButton(tool);
+                    toolButtons.Add(toolButton);
+                    toolListContainer.Add(toolButton);
                 }
-                dropdownOptions.Add(displayName);
             }
             
-            toolSelector.choices = dropdownOptions;
-            toolSelector.SetEnabled(true);
+            // Show initial tool selection prompt
+            ShowToolSelectionPrompt();
             
-            // Restore previously selected tool or set to first option
+            // Restore previously selected tool
             string preferredTool = EditorPrefs.GetString("MCP4Unity_SelectedTool", "");
-            var preferredIndex = availableTools.FindIndex(t => t.name == preferredTool);
-            if (preferredIndex >= 0)
+            var preferredToolObj = availableTools.FirstOrDefault(t => t.name == preferredTool);
+            if (preferredToolObj != null)
             {
-                toolSelector.value = dropdownOptions[preferredIndex + 1]; // +1 because of "Select a tool..." option
-                SelectTool(availableTools[preferredIndex]);
-            }
-            else
-            {
-                toolSelector.value = "Select a tool...";
-                ShowToolSelectionPrompt();
+                SelectTool(preferredToolObj);
             }
         }
         
-        void OnToolSelected(ChangeEvent<string> evt)
+        Button CreateToolButton(MCPTool tool)
         {
-            if (evt.newValue == "Select a tool..." || string.IsNullOrEmpty(evt.newValue))
+            var toolButton = new Button(() => SelectTool(tool));
+            toolButton.style.height = 40;
+            toolButton.style.marginBottom = 2;
+            toolButton.style.marginLeft = 5;
+            toolButton.style.marginRight = 5;
+            toolButton.style.paddingLeft = 10;
+            toolButton.style.paddingRight = 10;
+            toolButton.style.alignItems = Align.FlexStart;
+            
+            // Tool name container
+            var toolContent = new VisualElement();
+            toolContent.style.flexDirection = FlexDirection.Column;
+            toolContent.style.alignItems = Align.FlexStart;
+            toolContent.style.flexGrow = 1;
+            
+            var toolName = new Label($"{tool.name}({tool.inputSchema.orderedProperties.Count})");
+            toolName.style.fontSize = 12;
+            toolName.style.unityFontStyleAndWeight = FontStyle.Bold;
+            toolName.style.color = new Color(0.9f, 0.9f, 0.9f);
+            toolName.style.marginBottom = 2;
+            toolContent.Add(toolName);
+            
+            // Tool description (truncated)
+            if (!string.IsNullOrEmpty(tool.description))
             {
-                ShowToolSelectionPrompt();
-                return;
+                string desc = tool.description.Length > 60 ? 
+                    tool.description.Substring(0, 60) + "..." : 
+                    tool.description;
+                var descLabel = new Label(desc);
+                descLabel.style.fontSize = 10;
+                descLabel.style.color = new Color(0.7f, 0.7f, 0.7f);
+                descLabel.style.whiteSpace = WhiteSpace.Normal;
+                toolContent.Add(descLabel);
             }
             
-            // Find the selected tool by matching the dropdown option
-            var selectedIndex = toolSelector.choices.IndexOf(evt.newValue) - 1; // -1 because of "Select a tool..." option
-            if (selectedIndex >= 0 && selectedIndex < availableTools.Count)
+            toolButton.Add(toolContent);
+            
+            // Set tooltip
+            string tooltip = $"{tool.name}";
+            if (!string.IsNullOrEmpty(tool.description))
             {
-                var selectedTool = availableTools[selectedIndex];
-                SelectTool(selectedTool);
-                
-                // Save selection
-                EditorPrefs.SetString("MCP4Unity_SelectedTool", selectedTool.name);
+                tooltip += $"\n{tool.description}";
             }
+            toolButton.tooltip = tooltip;
+            
+            return toolButton;
+        }
+        
+        void ShowServiceNotRunningMessage()
+        {
+            var messageContainer = new VisualElement();
+            messageContainer.style.alignItems = Align.Center;
+            messageContainer.style.justifyContent = Justify.Center;
+            messageContainer.style.flexGrow = 1;
+            messageContainer.style.paddingTop = 50;
+            
+            var noServiceLabel = new Label("MCP Service is not running");
+            noServiceLabel.style.fontSize = 14;
+            noServiceLabel.style.color = Color.gray;
+            noServiceLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            messageContainer.Add(noServiceLabel);
+            
+            var instructionLabel = new Label("Start the service to see available tools");
+            instructionLabel.style.fontSize = 12;
+            instructionLabel.style.color = new Color(0.6f, 0.6f, 0.6f);
+            instructionLabel.style.marginTop = 10;
+            messageContainer.Add(instructionLabel);
+            
+            toolListContainer.Add(messageContainer);
+            
+            // Also show in details panel
+            var detailsMessage = new Label("Start the MCP service to see available tools.");
+            detailsMessage.style.color = Color.gray;
+            detailsMessage.style.unityFontStyleAndWeight = FontStyle.Italic;
+            detailsMessage.style.paddingTop = 20;
+            detailsMessage.style.paddingLeft = 20;
+            toolDetailsContainer.Add(detailsMessage);
+        }
+        
+        void ShowNoToolsMessage()
+        {
+            var messageContainer = new VisualElement();
+            messageContainer.style.alignItems = Align.Center;
+            messageContainer.style.justifyContent = Justify.Center;
+            messageContainer.style.flexGrow = 1;
+            messageContainer.style.paddingTop = 50;
+            
+            var noToolsLabel = new Label("No MCP tools found");
+            noToolsLabel.style.fontSize = 14;
+            noToolsLabel.style.color = Color.gray;
+            noToolsLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            messageContainer.Add(noToolsLabel);
+            
+            toolListContainer.Add(messageContainer);
+            
+            // Also show in details panel
+            var detailsMessage = new Label("No MCP tools found.");
+            detailsMessage.style.color = Color.gray;
+            detailsMessage.style.unityFontStyleAndWeight = FontStyle.Italic;
+            detailsMessage.style.paddingTop = 20;
+            detailsMessage.style.paddingLeft = 20;
+            toolDetailsContainer.Add(detailsMessage);
         }
         
         void ShowToolSelectionPrompt()
         {
-            toolContainer.Clear();
+            toolDetailsContainer.Clear();
             currentSelectedTool = null;
             currentToolParameterFields.Clear();
             currentToolResultLabel = null;
             
-            var promptLabel = new Label("Please select a tool from the dropdown above to configure and execute it.");
+            var promptContainer = new VisualElement();
+            promptContainer.style.alignItems = Align.Center;
+            promptContainer.style.justifyContent = Justify.Center;
+            promptContainer.style.flexGrow = 1;
+            promptContainer.style.paddingTop = 50;
+            
+            var promptLabel = new Label("Select a tool from the list");
+            promptLabel.style.fontSize = 16;
             promptLabel.style.color = new Color(0.7f, 0.7f, 0.7f);
-            promptLabel.style.unityFontStyleAndWeight = FontStyle.Italic;
-            promptLabel.style.paddingTop = 20;
-            promptLabel.style.paddingLeft = 20;
-            promptLabel.style.fontSize = 14;
-            toolContainer.Add(promptLabel);
+            promptLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            promptContainer.Add(promptLabel);
+            
+            var instructionLabel = new Label("Choose a tool from the left panel to configure and execute it");
+            instructionLabel.style.fontSize = 12;
+            instructionLabel.style.color = new Color(0.6f, 0.6f, 0.6f);
+            instructionLabel.style.marginTop = 10;
+            instructionLabel.style.unityTextAlign = TextAnchor.MiddleCenter;
+            promptContainer.Add(instructionLabel);
             
             // Show summary of available tools
             if (availableTools.Count > 0)
             {
                 var summaryLabel = new Label($"Available: {availableTools.Count} tools across {GetUniqueCategories().Count} categories");
-                summaryLabel.style.color = new Color(0.6f, 0.6f, 0.6f);
-                summaryLabel.style.fontSize = 12;
-                summaryLabel.style.paddingTop = 10;
-                summaryLabel.style.paddingLeft = 20;
-                toolContainer.Add(summaryLabel);
-                
-                // Show categories
-                var categoriesContainer = new VisualElement();
-                categoriesContainer.style.paddingLeft = 20;
-                categoriesContainer.style.paddingTop = 10;
-                
-                foreach (var category in GetUniqueCategories())
-                {
-                    var toolsInCategory = availableTools.Where(t => GetToolCategory(t) == category).ToList();
-                    var categoryLabel = new Label($"• {category}: {toolsInCategory.Count} tool{(toolsInCategory.Count != 1 ? "s" : "")}");
-                    categoryLabel.style.color = new Color(0.5f, 0.7f, 0.9f);
-                    categoryLabel.style.fontSize = 11;
-                    categoryLabel.style.marginBottom = 2;
-                    categoriesContainer.Add(categoryLabel);
-                }
-                
-                toolContainer.Add(categoriesContainer);
+                summaryLabel.style.color = new Color(0.5f, 0.7f, 0.9f);
+                summaryLabel.style.fontSize = 11;
+                summaryLabel.style.marginTop = 20;
+                promptContainer.Add(summaryLabel);
             }
+            
+            toolDetailsContainer.Add(promptContainer);
         }
         
         HashSet<string> GetUniqueCategories()
@@ -267,10 +379,40 @@ namespace MCP4Unity.Editor
         void SelectTool(MCPTool tool)
         {
             currentSelectedTool = tool;
-            toolContainer.Clear();
+            toolDetailsContainer.Clear();
             currentToolParameterFields.Clear();
             
+            // Update button selection visual state
+            UpdateToolButtonSelection(tool);
+            
             CreateSelectedToolUI(tool);
+            
+            // Save selection
+            EditorPrefs.SetString("MCP4Unity_SelectedTool", tool.name);
+        }
+        
+        void UpdateToolButtonSelection(MCPTool selectedTool)
+        {
+            foreach (var button in toolButtons)
+            {
+                // Reset all buttons to default style
+                button.style.backgroundColor = StyleKeyword.Null;
+                button.style.borderLeftWidth = 0;
+            }
+            
+            // Find and highlight selected button
+            var selectedButton = toolButtons.FirstOrDefault(b => 
+            {
+                var toolName = b.Q<Label>()?.text;
+                return toolName == selectedTool.name;
+            });
+            
+            if (selectedButton != null)
+            {
+                selectedButton.style.backgroundColor = new Color(0.2f, 0.4f, 0.8f, 0.3f);
+                selectedButton.style.borderLeftWidth = 3;
+                selectedButton.style.borderLeftColor = new Color(0.2f, 0.6f, 1f);
+            }
         }
         
         void CreateSelectedToolUI(MCPTool tool)
@@ -329,7 +471,7 @@ namespace MCP4Unity.Editor
             paramInfoLabel.style.color = new Color(0.6f, 0.6f, 0.6f);
             headerContainer.Add(paramInfoLabel);
             
-            toolContainer.Add(headerContainer);
+            toolDetailsContainer.Add(headerContainer);
             
             // Parameters section
             if (paramCount > 0)
@@ -340,7 +482,7 @@ namespace MCP4Unity.Editor
                 parametersHeader.style.marginBottom = 10;
                 parametersHeader.style.marginLeft = 20;
                 parametersHeader.style.color = new Color(0.9f, 0.9f, 0.9f);
-                toolContainer.Add(parametersHeader);
+                toolDetailsContainer.Add(parametersHeader);
                 
                 var parametersContainer = new VisualElement();
                 parametersContainer.style.paddingLeft = 20;
@@ -352,7 +494,7 @@ namespace MCP4Unity.Editor
                     CreateParameterUI(parametersContainer, tool, property);
                 }
                 
-                toolContainer.Add(parametersContainer);
+                toolDetailsContainer.Add(parametersContainer);
             }
             
             // Execution section
@@ -381,7 +523,7 @@ namespace MCP4Unity.Editor
             actionContainer.Add(executeButton);
             
             executionContainer.Add(actionContainer);
-            toolContainer.Add(executionContainer);
+            toolDetailsContainer.Add(executionContainer);
             
             // Result section
             var resultContainer = new VisualElement();
@@ -406,29 +548,12 @@ namespace MCP4Unity.Editor
             currentToolResultLabel.style.paddingRight = 15;
             resultContainer.Add(currentToolResultLabel);
             
-            toolContainer.Add(resultContainer);
+            toolDetailsContainer.Add(resultContainer);
         }
         
         string GetToolCategory(MCPTool tool)
         {
-            // Get category from the declaring type name
-            string typeName = tool.MethodInfo.DeclaringType.Name;
-            
-            // Remove common suffixes to get cleaner category names
-            if (typeName.EndsWith("Tools"))
-            {
-                typeName = typeName.Substring(0, typeName.Length - 5);
-            }
-            
-            // Convert to more readable format
-            switch (typeName.ToLower())
-            {
-                case "node": return "Node Operations";
-                case "buff": return "Buff Management";
-                case "asset": return "Asset Operations";
-                case "file": return "File Operations";
-                default: return typeName;
-            }
+            return tool.MethodInfo.DeclaringType.Name;
         }
         
         void CreateParameterUI(VisualElement parametersContainer, MCPTool tool, Property property)
