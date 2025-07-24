@@ -19,14 +19,12 @@ namespace MCP4Unity.Editor
         }
         
         Button startBtn;
-        VisualElement tabContainer;
-        VisualElement tabButtonContainer;
-        VisualElement currentTabContent;
-        Dictionary<string, Dictionary<string, TextField>> toolParameterFields = new Dictionary<string, Dictionary<string, TextField>>();
-        Dictionary<string, Label> toolResultLabels = new Dictionary<string, Label>();
-        Dictionary<string, VisualElement> tabContents = new Dictionary<string, VisualElement>();
-        Dictionary<string, Button> tabButtons = new Dictionary<string, Button>();
-        string currentActiveTab = "";
+        DropdownField toolSelector;
+        VisualElement toolContainer;
+        Dictionary<string, TextField> currentToolParameterFields = new Dictionary<string, TextField>();
+        Label currentToolResultLabel;
+        MCPTool currentSelectedTool;
+        List<MCPTool> availableTools = new List<MCPTool>();
 
         public void CreateGUI()
         {
@@ -54,7 +52,7 @@ namespace MCP4Unity.Editor
             root.Add(separator);
             
             // Tools section header
-            var toolsHeader = new Label("Available MCP Tools");
+            var toolsHeader = new Label("MCP Tool Selector");
             toolsHeader.style.fontSize = 16;
             toolsHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
             toolsHeader.style.marginBottom = 10;
@@ -66,18 +64,21 @@ namespace MCP4Unity.Editor
             refreshBtn.style.marginBottom = 10;
             root.Add(refreshBtn);
             
-            // Tab buttons container
-            tabButtonContainer = new VisualElement();
-            tabButtonContainer.style.flexDirection = FlexDirection.Row;
-            tabButtonContainer.style.marginBottom = 5;
-            tabButtonContainer.style.borderBottomWidth = 1;
-            tabButtonContainer.style.borderBottomColor = Color.gray;
-            root.Add(tabButtonContainer);
+            // Tool selector dropdown
+            toolSelector = new DropdownField("Select Tool:");
+            toolSelector.style.marginBottom = 15;
+            toolSelector.RegisterValueChangedCallback(OnToolSelected);
+            root.Add(toolSelector);
             
-            // Tab content container
-            tabContainer = new VisualElement();
-            tabContainer.style.flexGrow = 1;
-            root.Add(tabContainer);
+            // Tool content container
+            toolContainer = new VisualElement();
+            toolContainer.style.flexGrow = 1;
+            
+            // Create scroll view for the tool content
+            var scrollView = new ScrollView();
+            scrollView.style.flexGrow = 1;
+            scrollView.Add(toolContainer);
+            root.Add(scrollView);
             
             MCPService.OnStateChange += UpdateStartBtn;
             MCPService.OnStateChange += RefreshTools;
@@ -110,84 +111,302 @@ namespace MCP4Unity.Editor
         
         void RefreshTools()
         {
-            // Clear existing tabs
-            tabContainer.Clear();
-            tabButtonContainer.Clear();
-            toolParameterFields.Clear();
-            toolResultLabels.Clear();
-            tabContents.Clear();
-            tabButtons.Clear();
-            currentActiveTab = "";
+            // Clear existing content
+            toolContainer.Clear();
+            currentToolParameterFields.Clear();
+            currentToolResultLabel = null;
+            currentSelectedTool = null;
+            availableTools.Clear();
             
             if (!MCPService.Inst.Running)
             {
-                var noToolsLabel = new Label("MCP Service is not running. Start the service to see available tools.");
-                noToolsLabel.style.color = Color.gray;
-                noToolsLabel.style.unityFontStyleAndWeight = FontStyle.Italic;
-                noToolsLabel.style.paddingTop = 20;
-                noToolsLabel.style.paddingLeft = 20;
-                tabContainer.Add(noToolsLabel);
+                toolSelector.choices = new List<string> { "MCP Service is not running" };
+                toolSelector.value = "MCP Service is not running";
+                toolSelector.SetEnabled(false);
+                
+                var noServiceLabel = new Label("Start the MCP service to see available tools.");
+                noServiceLabel.style.color = Color.gray;
+                noServiceLabel.style.unityFontStyleAndWeight = FontStyle.Italic;
+                noServiceLabel.style.paddingTop = 20;
+                noServiceLabel.style.paddingLeft = 20;
+                toolContainer.Add(noServiceLabel);
                 return;
             }
             
             var tools = MCPFunctionInvoker.Tools;
             if (tools.Count == 0)
             {
+                toolSelector.choices = new List<string> { "No tools available" };
+                toolSelector.value = "No tools available";
+                toolSelector.SetEnabled(false);
+                
                 var noToolsLabel = new Label("No MCP tools found.");
                 noToolsLabel.style.color = Color.gray;
                 noToolsLabel.style.unityFontStyleAndWeight = FontStyle.Italic;
                 noToolsLabel.style.paddingTop = 20;
                 noToolsLabel.style.paddingLeft = 20;
-                tabContainer.Add(noToolsLabel);
+                toolContainer.Add(noToolsLabel);
                 return;
             }
             
-            // Group tools by category (based on class name or tool name patterns)
-            var toolGroups = GroupToolsByCategory(tools);
+            // Populate available tools and create dropdown options
+            availableTools = tools.Values.OrderBy(t => GetToolCategory(t)).ThenBy(t => t.name).ToList();
+            var dropdownOptions = new List<string>();
             
-            // Add "All Tools" tab if there are multiple categories
-            if (toolGroups.Count > 1)
+            // Add "Select a tool..." as first option
+            dropdownOptions.Add("Select a tool...");
+            
+            // Create detailed dropdown options with category and description
+            foreach (var tool in availableTools)
             {
-                var allTools = tools.Values.ToList();
-                CreateTab("All Tools", allTools);
+                string category = GetToolCategory(tool);
+                string displayName = $"[{category}] {tool.name}";
+                if (!string.IsNullOrEmpty(tool.description))
+                {
+                    // Truncate description if too long
+                    string desc = tool.description.Length > 50 ? 
+                        tool.description.Substring(0, 50) + "..." : 
+                        tool.description;
+                    displayName += $" - {desc}";
+                }
+                dropdownOptions.Add(displayName);
             }
             
-            // Create tabs for each category
-            foreach (var group in toolGroups.OrderBy(g => g.Key))
-            {
-                CreateTab(group.Key, group.Value);
-            }
+            toolSelector.choices = dropdownOptions;
+            toolSelector.SetEnabled(true);
             
-            // Activate the previously selected tab or the first tab
-            string preferredTab = EditorPrefs.GetString("MCP4Unity_ActiveTab", "");
-            if (!string.IsNullOrEmpty(preferredTab) && tabButtons.ContainsKey(preferredTab))
+            // Restore previously selected tool or set to first option
+            string preferredTool = EditorPrefs.GetString("MCP4Unity_SelectedTool", "");
+            var preferredIndex = availableTools.FindIndex(t => t.name == preferredTool);
+            if (preferredIndex >= 0)
             {
-                ActivateTab(preferredTab);
+                toolSelector.value = dropdownOptions[preferredIndex + 1]; // +1 because of "Select a tool..." option
+                SelectTool(availableTools[preferredIndex]);
             }
-            else if (tabButtons.Count > 0)
+            else
             {
-                var firstTab = tabButtons.Keys.First();
-                ActivateTab(firstTab);
+                toolSelector.value = "Select a tool...";
+                ShowToolSelectionPrompt();
             }
         }
         
-        Dictionary<string, List<MCPTool>> GroupToolsByCategory(Dictionary<string, MCPTool> tools)
+        void OnToolSelected(ChangeEvent<string> evt)
         {
-            var groups = new Dictionary<string, List<MCPTool>>();
-            
-            foreach (var toolPair in tools)
+            if (evt.newValue == "Select a tool..." || string.IsNullOrEmpty(evt.newValue))
             {
-                var tool = toolPair.Value;
-                string category = GetToolCategory(tool);
-                
-                if (!groups.ContainsKey(category))
-                {
-                    groups[category] = new List<MCPTool>();
-                }
-                groups[category].Add(tool);
+                ShowToolSelectionPrompt();
+                return;
             }
             
-            return groups;
+            // Find the selected tool by matching the dropdown option
+            var selectedIndex = toolSelector.choices.IndexOf(evt.newValue) - 1; // -1 because of "Select a tool..." option
+            if (selectedIndex >= 0 && selectedIndex < availableTools.Count)
+            {
+                var selectedTool = availableTools[selectedIndex];
+                SelectTool(selectedTool);
+                
+                // Save selection
+                EditorPrefs.SetString("MCP4Unity_SelectedTool", selectedTool.name);
+            }
+        }
+        
+        void ShowToolSelectionPrompt()
+        {
+            toolContainer.Clear();
+            currentSelectedTool = null;
+            currentToolParameterFields.Clear();
+            currentToolResultLabel = null;
+            
+            var promptLabel = new Label("Please select a tool from the dropdown above to configure and execute it.");
+            promptLabel.style.color = new Color(0.7f, 0.7f, 0.7f);
+            promptLabel.style.unityFontStyleAndWeight = FontStyle.Italic;
+            promptLabel.style.paddingTop = 20;
+            promptLabel.style.paddingLeft = 20;
+            promptLabel.style.fontSize = 14;
+            toolContainer.Add(promptLabel);
+            
+            // Show summary of available tools
+            if (availableTools.Count > 0)
+            {
+                var summaryLabel = new Label($"Available: {availableTools.Count} tools across {GetUniqueCategories().Count} categories");
+                summaryLabel.style.color = new Color(0.6f, 0.6f, 0.6f);
+                summaryLabel.style.fontSize = 12;
+                summaryLabel.style.paddingTop = 10;
+                summaryLabel.style.paddingLeft = 20;
+                toolContainer.Add(summaryLabel);
+                
+                // Show categories
+                var categoriesContainer = new VisualElement();
+                categoriesContainer.style.paddingLeft = 20;
+                categoriesContainer.style.paddingTop = 10;
+                
+                foreach (var category in GetUniqueCategories())
+                {
+                    var toolsInCategory = availableTools.Where(t => GetToolCategory(t) == category).ToList();
+                    var categoryLabel = new Label($"• {category}: {toolsInCategory.Count} tool{(toolsInCategory.Count != 1 ? "s" : "")}");
+                    categoryLabel.style.color = new Color(0.5f, 0.7f, 0.9f);
+                    categoryLabel.style.fontSize = 11;
+                    categoryLabel.style.marginBottom = 2;
+                    categoriesContainer.Add(categoryLabel);
+                }
+                
+                toolContainer.Add(categoriesContainer);
+            }
+        }
+        
+        HashSet<string> GetUniqueCategories()
+        {
+            var categories = new HashSet<string>();
+            foreach (var tool in availableTools)
+            {
+                categories.Add(GetToolCategory(tool));
+            }
+            return categories;
+        }
+        
+        void SelectTool(MCPTool tool)
+        {
+            currentSelectedTool = tool;
+            toolContainer.Clear();
+            currentToolParameterFields.Clear();
+            
+            CreateSelectedToolUI(tool);
+        }
+        
+        void CreateSelectedToolUI(MCPTool tool)
+        {
+            // Tool header with enhanced information
+            var headerContainer = new VisualElement();
+            headerContainer.style.backgroundColor = new Color(0.15f, 0.15f, 0.15f, 0.8f);
+            headerContainer.style.paddingTop = 15;
+            headerContainer.style.paddingBottom = 15;
+            headerContainer.style.paddingLeft = 20;
+            headerContainer.style.paddingRight = 20;
+            headerContainer.style.marginBottom = 15;
+            headerContainer.style.borderLeftWidth = 4;
+            headerContainer.style.borderLeftColor = new Color(0.2f, 0.6f, 1f);
+            
+            // Tool name and category
+            var titleContainer = new VisualElement();
+            titleContainer.style.flexDirection = FlexDirection.Row;
+            titleContainer.style.alignItems = Align.Center;
+            titleContainer.style.marginBottom = 8;
+            
+            var nameLabel = new Label(tool.name);
+            nameLabel.style.fontSize = 18;
+            nameLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            nameLabel.style.color = new Color(0.2f, 0.6f, 1f);
+            titleContainer.Add(nameLabel);
+            
+            var categoryBadge = new Label($"[{GetToolCategory(tool)}]");
+            categoryBadge.style.fontSize = 12;
+            categoryBadge.style.marginLeft = 15;
+            categoryBadge.style.color = new Color(0.8f, 0.8f, 0.8f);
+            categoryBadge.style.backgroundColor = new Color(0.3f, 0.3f, 0.3f, 0.6f);
+            categoryBadge.style.paddingLeft = 8;
+            categoryBadge.style.paddingRight = 8;
+            categoryBadge.style.paddingTop = 2;
+            categoryBadge.style.paddingBottom = 2;
+            titleContainer.Add(categoryBadge);
+            
+            headerContainer.Add(titleContainer);
+            
+            // Tool description
+            if (!string.IsNullOrEmpty(tool.description))
+            {
+                var descLabel = new Label(tool.description);
+                descLabel.style.fontSize = 13;
+                descLabel.style.color = new Color(0.8f, 0.8f, 0.8f);
+                descLabel.style.whiteSpace = WhiteSpace.Normal;
+                descLabel.style.marginBottom = 5;
+                headerContainer.Add(descLabel);
+            }
+            
+            // Parameters count info
+            var paramCount = tool.inputSchema.orderedProperties.Count;
+            var paramInfoLabel = new Label($"Parameters: {paramCount}");
+            paramInfoLabel.style.fontSize = 11;
+            paramInfoLabel.style.color = new Color(0.6f, 0.6f, 0.6f);
+            headerContainer.Add(paramInfoLabel);
+            
+            toolContainer.Add(headerContainer);
+            
+            // Parameters section
+            if (paramCount > 0)
+            {
+                var parametersHeader = new Label("Parameters");
+                parametersHeader.style.fontSize = 14;
+                parametersHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
+                parametersHeader.style.marginBottom = 10;
+                parametersHeader.style.marginLeft = 20;
+                parametersHeader.style.color = new Color(0.9f, 0.9f, 0.9f);
+                toolContainer.Add(parametersHeader);
+                
+                var parametersContainer = new VisualElement();
+                parametersContainer.style.paddingLeft = 20;
+                parametersContainer.style.paddingRight = 20;
+                parametersContainer.style.marginBottom = 20;
+                
+                foreach (var property in tool.inputSchema.orderedProperties)
+                {
+                    CreateParameterUI(parametersContainer, tool, property);
+                }
+                
+                toolContainer.Add(parametersContainer);
+            }
+            
+            // Execution section
+            var executionContainer = new VisualElement();
+            executionContainer.style.paddingLeft = 20;
+            executionContainer.style.paddingRight = 20;
+            executionContainer.style.marginBottom = 20;
+            
+            var executionHeader = new Label("Execution");
+            executionHeader.style.fontSize = 14;
+            executionHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
+            executionHeader.style.marginBottom = 10;
+            executionHeader.style.color = new Color(0.9f, 0.9f, 0.9f);
+            executionContainer.Add(executionHeader);
+            
+            var actionContainer = new VisualElement();
+            actionContainer.style.flexDirection = FlexDirection.Row;
+            actionContainer.style.alignItems = Align.Center;
+            
+            var executeButton = new Button(() => ExecuteCurrentTool()) { text = "Execute Tool" };
+            executeButton.style.width = 120;
+            executeButton.style.height = 32;
+            executeButton.style.backgroundColor = new Color(0.2f, 0.7f, 0.2f);
+            executeButton.style.color = Color.white;
+            executeButton.style.unityFontStyleAndWeight = FontStyle.Bold;
+            actionContainer.Add(executeButton);
+            
+            executionContainer.Add(actionContainer);
+            toolContainer.Add(executionContainer);
+            
+            // Result section
+            var resultContainer = new VisualElement();
+            resultContainer.style.paddingLeft = 20;
+            resultContainer.style.paddingRight = 20;
+            
+            var resultHeader = new Label("Result");
+            resultHeader.style.fontSize = 14;
+            resultHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
+            resultHeader.style.marginBottom = 10;
+            resultHeader.style.color = new Color(0.9f, 0.9f, 0.9f);
+            resultContainer.Add(resultHeader);
+            
+            currentToolResultLabel = new Label("Execute the tool to see results here.");
+            currentToolResultLabel.style.fontSize = 12;
+            currentToolResultLabel.style.whiteSpace = WhiteSpace.Normal;
+            currentToolResultLabel.style.color = new Color(0.7f, 0.7f, 0.7f);
+            currentToolResultLabel.style.backgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.5f);
+            currentToolResultLabel.style.paddingTop = 10;
+            currentToolResultLabel.style.paddingBottom = 10;
+            currentToolResultLabel.style.paddingLeft = 15;
+            currentToolResultLabel.style.paddingRight = 15;
+            resultContainer.Add(currentToolResultLabel);
+            
+            toolContainer.Add(resultContainer);
         }
         
         string GetToolCategory(MCPTool tool)
@@ -212,252 +431,77 @@ namespace MCP4Unity.Editor
             }
         }
         
-        void CreateTab(string tabName, List<MCPTool> tools)
+        void CreateParameterUI(VisualElement parametersContainer, MCPTool tool, Property property)
         {
-            // Create tab button
-            var tabButton = new Button(() => ActivateTab(tabName))
-            {
-                text = $"{tabName} ({tools.Count})"
-            };
-            tabButton.style.height = 25;
-            tabButton.style.paddingLeft = 10;
-            tabButton.style.paddingRight = 10;
-            tabButton.style.marginRight = 2;
-            tabButton.style.borderBottomLeftRadius = 0;
-            tabButton.style.borderBottomRightRadius = 0;
+            var paramContainer = new VisualElement();
+            paramContainer.style.backgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.3f);
+            paramContainer.style.marginBottom = 8;
+            paramContainer.style.paddingTop = 10;
+            paramContainer.style.paddingBottom = 10;
+            paramContainer.style.paddingLeft = 15;
+            paramContainer.style.paddingRight = 15;
             
-            // Special styling for "All Tools" tab
-            if (tabName == "All Tools")
-            {
-                tabButton.style.backgroundColor = new Color(0.1f, 0.3f, 0.1f);
-                tabButton.style.unityFontStyleAndWeight = FontStyle.Bold;
-            }
-            
-            tabButtonContainer.Add(tabButton);
-            tabButtons[tabName] = tabButton;
-            
-            // Create tab content
-            var tabContent = new VisualElement();
-            tabContent.style.display = DisplayStyle.None;
-            tabContent.style.flexGrow = 1;
-            
-            // Create scroll view for the tab content
-            var scrollView = new ScrollView();
-            scrollView.style.flexGrow = 1;
-            scrollView.style.paddingTop = 10;
-            
-            var toolsContainer = new VisualElement();
-            scrollView.Add(toolsContainer);
-            tabContent.Add(scrollView);
-            
-            // Add header for the tab if it's not "All Tools"
-            if (tabName != "All Tools")
-            {
-                var categoryHeader = new Label($"{tabName} - {tools.Count} tool{(tools.Count != 1 ? "s" : "")}");
-                categoryHeader.style.fontSize = 12;
-                categoryHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
-                categoryHeader.style.color = new Color(0.7f, 0.7f, 0.7f);
-                categoryHeader.style.marginBottom = 10;
-                categoryHeader.style.marginLeft = 10;
-                toolsContainer.Add(categoryHeader);
-            }
-            
-            // Add tools to this tab
-            foreach (var tool in tools.OrderBy(t => t.name))
-            {
-                CreateToolUI(toolsContainer, tool);
-            }
-            
-            tabContainer.Add(tabContent);
-            tabContents[tabName] = tabContent;
-        }
-        
-        void ActivateTab(string tabName)
-        {
-            if (currentActiveTab == tabName) return;
-            
-            // Deactivate current tab
-            if (!string.IsNullOrEmpty(currentActiveTab))
-            {
-                if (tabContents.ContainsKey(currentActiveTab))
-                {
-                    tabContents[currentActiveTab].style.display = DisplayStyle.None;
-                }
-                if (tabButtons.ContainsKey(currentActiveTab))
-                {
-                    var prevButton = tabButtons[currentActiveTab];
-                    // Reset to default color or special color for "All Tools"
-                    if (currentActiveTab == "All Tools")
-                    {
-                        prevButton.style.backgroundColor = new Color(0.1f, 0.3f, 0.1f);
-                    }
-                    else
-                    {
-                        prevButton.style.backgroundColor = StyleKeyword.Null;
-                    }
-                    prevButton.style.color = StyleKeyword.Null;
-                }
-            }
-            
-            // Activate new tab
-            currentActiveTab = tabName;
-            if (tabContents.ContainsKey(tabName))
-            {
-                tabContents[tabName].style.display = DisplayStyle.Flex;
-            }
-            if (tabButtons.ContainsKey(tabName))
-            {
-                var activeButton = tabButtons[tabName];
-                activeButton.style.backgroundColor = new Color(0.3f, 0.5f, 0.8f);
-                activeButton.style.color = Color.white;
-            }
-            
-            // Save active tab preference
-            EditorPrefs.SetString("MCP4Unity_ActiveTab", tabName);
-        }
-        
-        void CreateToolUI(VisualElement container, MCPTool tool)
-        {
-            // Tool container with improved styling
-            var toolContainer = new VisualElement();
-            toolContainer.style.backgroundColor = new Color(0.2f, 0.2f, 0.2f, 0.1f);
-            toolContainer.style.marginBottom = 8;
-            toolContainer.style.paddingTop = 10;
-            toolContainer.style.paddingBottom = 10;
-            toolContainer.style.paddingLeft = 15;
-            toolContainer.style.paddingRight = 15;
-            toolContainer.style.borderLeftWidth = 3;
-            toolContainer.style.borderLeftColor = new Color(0.2f, 0.6f, 1f);
-            
-            // Tool header container
+            // Parameter name and type
             var headerContainer = new VisualElement();
+            headerContainer.style.flexDirection = FlexDirection.Row;
+            headerContainer.style.alignItems = Align.Center;
             headerContainer.style.marginBottom = 8;
             
-            // Tool name and category info
-            var nameContainer = new VisualElement();
-            nameContainer.style.flexDirection = FlexDirection.Row;
-            nameContainer.style.alignItems = Align.Center;
+            var paramLabel = new Label($"{property.Name}");
+            paramLabel.style.fontSize = 12;
+            paramLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            paramLabel.style.color = new Color(0.9f, 0.9f, 0.9f);
+            headerContainer.Add(paramLabel);
             
-            var nameLabel = new Label(tool.name);
-            nameLabel.style.fontSize = 14;
-            nameLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
-            nameLabel.style.color = new Color(0.2f, 0.6f, 1f);
-            nameContainer.Add(nameLabel);
+            var typeLabel = new Label($"({property.type})");
+            typeLabel.style.fontSize = 11;
+            typeLabel.style.color = new Color(0.6f, 0.8f, 1f);
+            typeLabel.style.marginLeft = 8;
+            headerContainer.Add(typeLabel);
             
-            // Add category badge for "All Tools" tab
-            if (currentActiveTab == "All Tools")
+            paramContainer.Add(headerContainer);
+            
+            // Parameter description
+            if (!string.IsNullOrEmpty(property.description))
             {
-                var categoryBadge = new Label($"[{GetToolCategory(tool)}]");
-                categoryBadge.style.fontSize = 10;
-                categoryBadge.style.marginLeft = 10;
-                categoryBadge.style.color = new Color(0.6f, 0.6f, 0.6f);
-                categoryBadge.style.backgroundColor = new Color(0.3f, 0.3f, 0.3f, 0.3f);
-                categoryBadge.style.paddingLeft = 5;
-                categoryBadge.style.paddingRight = 5;
-                nameContainer.Add(categoryBadge);
-            }
-            
-            headerContainer.Add(nameContainer);
-            
-            if (!string.IsNullOrEmpty(tool.description))
-            {
-                var descLabel = new Label(tool.description);
+                var descLabel = new Label(property.description);
                 descLabel.style.fontSize = 11;
                 descLabel.style.color = new Color(0.7f, 0.7f, 0.7f);
                 descLabel.style.whiteSpace = WhiteSpace.Normal;
-                descLabel.style.marginTop = 2;
-                headerContainer.Add(descLabel);
+                descLabel.style.marginBottom = 8;
+                paramContainer.Add(descLabel);
             }
             
-            toolContainer.Add(headerContainer);
-            
-            // Parameters container
-            var parametersContainer = new VisualElement();
-            parametersContainer.style.marginLeft = 5;
-            parametersContainer.style.marginBottom = 8;
-            toolContainer.Add(parametersContainer);
-            
-            // Store parameter fields for this tool
-            var paramFields = new Dictionary<string, TextField>();
-            toolParameterFields[tool.name] = paramFields;
-            
-            // Create parameter input fields using ordered properties to maintain correct order
-            foreach (var property in tool.inputSchema.orderedProperties)
-            {
-                CreateParameterUI(parametersContainer, tool, property, paramFields);
-            }
-            
-            // Call button and result container
-            var actionContainer = new VisualElement();
-            actionContainer.style.flexDirection = FlexDirection.Row;
-            actionContainer.style.alignItems = Align.Center;
-            actionContainer.style.marginTop = 8;
-            
-            var callButton = new Button(() => CallTool(tool.name)) { text = "Execute Tool" };
-            callButton.style.width = 100;
-            callButton.style.height = 28;
-            callButton.style.backgroundColor = new Color(0.2f, 0.7f, 0.2f);
-            callButton.style.color = Color.white;
-            actionContainer.Add(callButton);
-            
-            // Result label
-            var resultLabel = new Label();
-            resultLabel.style.flexGrow = 1;
-            resultLabel.style.marginLeft = 10;
-            resultLabel.style.fontSize = 11;
-            resultLabel.style.whiteSpace = WhiteSpace.Normal;
-            toolResultLabels[tool.name] = resultLabel;
-            actionContainer.Add(resultLabel);
-            
-            toolContainer.Add(actionContainer);
-            container.Add(toolContainer);
-        }
-        
-        void CreateParameterUI(VisualElement parametersContainer, MCPTool tool, Property property, Dictionary<string, TextField> paramFields)
-        {
-            var paramContainer = new VisualElement();
-            paramContainer.style.flexDirection = FlexDirection.Row;
-            paramContainer.style.alignItems = Align.Center;
-            paramContainer.style.marginBottom = 5;
-            
-            var paramLabel = new Label($"{property.Name}:");
-            paramLabel.style.minWidth = 120;
-            paramLabel.style.fontSize = 11;
-            paramLabel.style.color = new Color(0.9f, 0.9f, 0.9f);
-            paramContainer.Add(paramLabel);
-            
-            // Create input field container that can hold both text field and dropdown button
+            // Input field container
             var inputContainer = new VisualElement();
             inputContainer.style.flexDirection = FlexDirection.Row;
-            inputContainer.style.flexGrow = 1;
-            inputContainer.style.marginLeft = 8;
             
             var paramField = new TextField();
             paramField.style.flexGrow = 1;
-            paramField.style.height = 20;
+            paramField.style.height = 25;
             
-            // Set placeholder text based on type and description
-            string placeholder = property.type;
+            // Set tooltip
+            string tooltip = $"Type: {property.type}";
             if (!string.IsNullOrEmpty(property.description))
             {
-                placeholder += $" - {property.description}";
+                tooltip += $"\nDescription: {property.description}";
             }
-            paramField.tooltip = placeholder;
+            paramField.tooltip = tooltip;
             
             inputContainer.Add(paramField);
-            paramFields[property.Name] = paramField;
+            currentToolParameterFields[property.Name] = paramField;
             
             // Add dropdown button if parameter has ParamDropdown attribute
             if (property.HasDropdown)
             {
-                var dropdownButton = new Button(() => ShowDropdown(tool, property, paramField))
+                var dropdownButton = new Button(() => ShowParameterDropdown(tool, property, paramField))
                 {
                     text = "▼"
                 };
-                dropdownButton.style.width = 25;
-                dropdownButton.style.height = 20;
-                dropdownButton.style.marginLeft = 2;
-                dropdownButton.style.fontSize = 10;
+                dropdownButton.style.width = 30;
+                dropdownButton.style.height = 25;
+                dropdownButton.style.marginLeft = 5;
+                dropdownButton.style.fontSize = 12;
                 dropdownButton.style.backgroundColor = new Color(0.4f, 0.4f, 0.4f);
                 dropdownButton.tooltip = "Click to select from available options";
                 inputContainer.Add(dropdownButton);
@@ -467,7 +511,7 @@ namespace MCP4Unity.Editor
             parametersContainer.Add(paramContainer);
         }
         
-        void ShowDropdown(MCPTool tool, Property property, TextField targetField)
+        void ShowParameterDropdown(MCPTool tool, Property property, TextField targetField)
         {
             try
             {
@@ -519,10 +563,9 @@ namespace MCP4Unity.Editor
             menu.ShowAsContext();
         }
         
-        void CallTool(string toolName)
+        void ExecuteCurrentTool()
         {
-            if (!toolParameterFields.TryGetValue(toolName, out var paramFields) ||
-                !toolResultLabels.TryGetValue(toolName, out var resultLabel))
+            if (currentSelectedTool == null || currentToolResultLabel == null)
             {
                 return;
             }
@@ -530,19 +573,18 @@ namespace MCP4Unity.Editor
             try
             {
                 // Clear previous result
-                resultLabel.text = "";
-                resultLabel.style.color = Color.white;
+                currentToolResultLabel.text = "Executing...";
+                currentToolResultLabel.style.color = new Color(0.8f, 0.8f, 0.2f);
                 
                 // Build parameters JObject
                 var parameters = new JObject();
-                foreach (var field in paramFields)
+                foreach (var field in currentToolParameterFields)
                 {
                     string value = field.Value.value;
                     if (!string.IsNullOrEmpty(value))
                     {
                         // Try to parse as appropriate type
-                        var tool = MCPFunctionInvoker.Tools[toolName];
-                        var property = tool.inputSchema.properties[field.Key];
+                        var property = currentSelectedTool.inputSchema.properties[field.Key];
                         
                         try
                         {
@@ -583,25 +625,21 @@ namespace MCP4Unity.Editor
                 }
                 
                 // Call the tool
-                var result = MCPFunctionInvoker.Invoke(toolName, parameters);
+                var result = MCPFunctionInvoker.Invoke(currentSelectedTool.name, parameters);
                 
                 // Display result
                 string resultText = result?.ToString() ?? "null";
-                if (resultText.Length > 200)
-                {
-                    resultText = resultText.Substring(0, 200) + "...";
-                }
                 
-                resultLabel.text = $"✓ {resultText}";
-                resultLabel.style.color = new Color(0.2f, 0.8f, 0.2f);
+                currentToolResultLabel.text = $"✓ Success: {resultText}";
+                currentToolResultLabel.style.color = new Color(0.2f, 0.8f, 0.2f);
                 
-                Debug.Log($"MCP Tool '{toolName}' called successfully. Result: {result}");
+                Debug.Log($"MCP Tool '{currentSelectedTool.name}' executed successfully. Result: {result}");
             }
             catch (System.Exception ex)
             {
-                resultLabel.text = $"✗ Error: {ex.Message}";
-                resultLabel.style.color = new Color(0.8f, 0.2f, 0.2f);
-                Debug.LogError($"Error calling MCP Tool '{toolName}': {ex}");
+                currentToolResultLabel.text = $"✗ Error: {ex.Message}";
+                currentToolResultLabel.style.color = new Color(0.8f, 0.2f, 0.2f);
+                Debug.LogError($"Error executing MCP Tool '{currentSelectedTool.name}': {ex}");
             }
         }
     }
