@@ -224,12 +224,15 @@ namespace MCP4Unity.Editor
         Button CreateToolButton(MCPTool tool)
         {
             var toolButton = new Button(() => SelectTool(tool));
-            toolButton.style.height = 40;
+            // Remove fixed height to allow dynamic sizing
+            toolButton.style.minHeight = 50; // Set minimum height instead of fixed height
             toolButton.style.marginBottom = 2;
             toolButton.style.marginLeft = 5;
             toolButton.style.marginRight = 5;
             toolButton.style.paddingLeft = 10;
             toolButton.style.paddingRight = 10;
+            toolButton.style.paddingTop = 8;
+            toolButton.style.paddingBottom = 8;
             toolButton.style.alignItems = Align.FlexStart;
             
             // Tool name container
@@ -237,30 +240,32 @@ namespace MCP4Unity.Editor
             toolContent.style.flexDirection = FlexDirection.Column;
             toolContent.style.alignItems = Align.FlexStart;
             toolContent.style.flexGrow = 1;
+            toolContent.style.width = new Length(100, LengthUnit.Percent);
             
             var toolName = new Label($"{tool.name}({tool.inputSchema.orderedProperties.Count})");
             toolName.style.fontSize = 12;
             toolName.style.unityFontStyleAndWeight = FontStyle.Bold;
             toolName.style.color = new Color(0.9f, 0.9f, 0.9f);
-            toolName.style.marginBottom = 2;
+            toolName.style.marginBottom = 4;
+            toolName.style.whiteSpace = WhiteSpace.Normal; // Allow text wrapping
             toolContent.Add(toolName);
             
-            // Tool description (truncated)
+            // Tool description (show complete description)
             if (!string.IsNullOrEmpty(tool.description))
             {
-                string desc = tool.description.Length > 60 ? 
-                    tool.description.Substring(0, 60) + "..." : 
-                    tool.description;
-                var descLabel = new Label(desc);
+                var descLabel = new Label(tool.description);
                 descLabel.style.fontSize = 10;
                 descLabel.style.color = new Color(0.7f, 0.7f, 0.7f);
-                descLabel.style.whiteSpace = WhiteSpace.Normal;
+                descLabel.style.whiteSpace = WhiteSpace.Normal; // Allow text wrapping
+                descLabel.style.width = new Length(100, LengthUnit.Percent);
+                descLabel.style.flexShrink = 0; // Prevent text from being compressed
+                descLabel.style.unityTextAlign = TextAnchor.MiddleLeft;
                 toolContent.Add(descLabel);
             }
             
             toolButton.Add(toolContent);
             
-            // Set tooltip
+            // Set tooltip with enhanced information
             string tooltip = $"{tool.name}";
             if (!string.IsNullOrEmpty(tool.description))
             {
@@ -403,8 +408,16 @@ namespace MCP4Unity.Editor
             // Find and highlight selected button
             var selectedButton = toolButtons.FirstOrDefault(b => 
             {
-                var toolName = b.Q<Label>()?.text;
-                return toolName == selectedTool.name;
+                var toolNameLabel = b.Q<Label>();
+                if (toolNameLabel != null)
+                {
+                    // Extract tool name from the label text (format: "toolname(paramCount)")
+                    var labelText = toolNameLabel.text;
+                    var parenIndex = labelText.IndexOf('(');
+                    var toolName = parenIndex > 0 ? labelText.Substring(0, parenIndex) : labelText;
+                    return toolName == selectedTool.name;
+                }
+                return false;
             });
             
             if (selectedButton != null)
@@ -466,17 +479,17 @@ namespace MCP4Unity.Editor
             
             // Parameters count info
             var paramCount = tool.inputSchema.orderedProperties.Count;
-            var paramInfoLabel = new Label($"Parameters: {paramCount}");
-            paramInfoLabel.style.fontSize = 11;
-            paramInfoLabel.style.color = new Color(0.6f, 0.6f, 0.6f);
-            headerContainer.Add(paramInfoLabel);
+            //var paramInfoLabel = new Label($"Parameters: {paramCount}");
+            //paramInfoLabel.style.fontSize = 11;
+            //paramInfoLabel.style.color = new Color(0.6f, 0.6f, 0.6f);
+            //headerContainer.Add(paramInfoLabel);
             
             toolDetailsContainer.Add(headerContainer);
             
             // Parameters section
             if (paramCount > 0)
             {
-                var parametersHeader = new Label("Parameters");
+                var parametersHeader = new Label($"Parameters:{paramCount}");
                 parametersHeader.style.fontSize = 14;
                 parametersHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
                 parametersHeader.style.marginBottom = 10;
