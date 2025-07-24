@@ -46,13 +46,14 @@ namespace MCP4Unity.Editor
             {
                 try
                 {
-                    Property[] properties = tool.inputSchema.properties.Values.ToArray();
+                    // Use orderedProperties to maintain parameter order
+                    Property[] properties = tool.inputSchema.orderedProperties.ToArray();
                     object[] objects = new object[properties.Length];
                     for (int i = 0; i < properties.Length; i++)
                     {
                         Type type = properties[i].Type;
                         JToken jToken = parameters[properties[i].Name];
-                        objects[i] = jToken.ToObject(type);
+                        objects[i] = jToken?.ToObject(type);
                     }
                     return tool.MethodInfo.Invoke(null, objects);
                 }

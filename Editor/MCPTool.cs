@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Reflection;
 using Newtonsoft.Json;
@@ -11,15 +11,32 @@ namespace MCP4Unity.Editor
         public Type Type;
         [JsonIgnore]
         public string Name;
+        [JsonIgnore]
+        public int Order; // Add order to maintain parameter sequence
+        [JsonIgnore]
+        public ParameterInfo ParameterInfo; // Store parameter info for attribute access
         public string type;
 
         public string description;
-        public Property(string name,Type type_)
+        public Property(string name, Type type_, int order = 0, ParameterInfo parameterInfo = null)
         {
             Type = type_;
             Name = name;
+            Order = order;
+            ParameterInfo = parameterInfo;
             type = SharpTypeToTypeScriptType(type_);
         }
+        
+        /// <summary>
+        /// Check if this parameter has ParamDropdown attribute
+        /// </summary>
+        public bool HasDropdown => ParameterInfo?.GetCustomAttribute<ParamDropdownAttribute>() != null;
+        
+        /// <summary>
+        /// Get the ParamDropdown attribute if it exists
+        /// </summary>
+        public ParamDropdownAttribute GetDropdownAttribute() => ParameterInfo?.GetCustomAttribute<ParamDropdownAttribute>();
+        
         public static string SharpTypeToTypeScriptType(Type type)
         {
             if (type == typeof(int))
@@ -72,6 +89,10 @@ namespace MCP4Unity.Editor
     {
         public string type = "object";
         public Dictionary<string, Property> properties = new();
+        
+        // Add ordered properties list to maintain parameter order
+        [JsonIgnore]
+        public List<Property> orderedProperties = new();
     }
 
     public class ToolResponse
@@ -104,17 +125,22 @@ namespace MCP4Unity.Editor
             description = toolAttribute.Desc;
             inputSchema = new();
             ParameterInfo[] parameters = methodInfo.GetParameters();
+            
+            // Process parameters in their original order
             for (int i = 0; i < parameters.Length; i++)
             {
                 DescAttribute descAttribute = parameters[i].GetCustomAttribute<DescAttribute>();
-                Property property = new(parameters[i].Name, parameters[i].ParameterType);
+                Property property = new(parameters[i].Name, parameters[i].ParameterType, i, parameters[i]);
                 if (descAttribute != null)
                 {
                     property.description = descAttribute.Desc;
                 }
+                
+                // Add to both dictionary and ordered list
                 inputSchema.properties.Add(parameters[i].Name, property);
+                inputSchema.orderedProperties.Add(property);
             }
-            returns = new("return", methodInfo.ReturnType) { description = toolAttribute .ReturnDesc};
+            returns = new("return", methodInfo.ReturnType) { description = toolAttribute.ReturnDesc};
         }
 
     }

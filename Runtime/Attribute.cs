@@ -1,4 +1,7 @@
-using System;
+﻿using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Reflection;
 using UnityEngine;
 
 namespace MCP4Unity
@@ -10,6 +13,15 @@ namespace MCP4Unity
         public DescAttribute( string desc = null)
         {
             Desc = desc;
+        }
+    }
+    [AttributeUsage(AttributeTargets.Parameter, AllowMultiple = false)]
+    public class ParamDropdownAttribute : Attribute
+    { 
+        public string MethodName;
+        public ParamDropdownAttribute(string methodName)
+        {
+            MethodName = methodName;
         }
     }
 
