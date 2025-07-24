@@ -799,7 +799,7 @@ namespace MCP4Unity.Editor
                 // Display result
                 string resultText = result?.ToString() ?? "null";
                 
-                currentToolResultLabel.text = $"✓ Success: {resultText}";
+                currentToolResultLabel.text = $"✓ Success: \n{resultText}";
                 currentToolResultLabel.style.color = new Color(0.2f, 0.8f, 0.2f);
                 
                 Debug.Log($"MCP Tool '{currentSelectedTool.name}' executed successfully. Result: {result}");
