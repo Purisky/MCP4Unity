@@ -21,7 +21,7 @@ namespace MCP4Unity.Editor
         Button startBtn;
         VisualElement toolListContainer;
         VisualElement toolDetailsContainer;
-        Dictionary<string, TextField> currentToolParameterFields = new Dictionary<string, TextField>();
+        Dictionary<string, TextField> currentToolParameterFields = new();
         Label currentToolResultLabel;
         MCPTool currentSelectedTool;
         List<MCPTool> availableTools = new List<MCPTool>();
