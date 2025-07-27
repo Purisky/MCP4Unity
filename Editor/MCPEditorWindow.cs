@@ -625,10 +625,6 @@ namespace MCP4Unity.Editor
                 tooltip += $"\nDescription: {property.description}";
             }
             paramField.tooltip = tooltip;
-            
-            inputContainer.Add(paramField);
-            currentToolParameterFields[property.Name] = paramField;
-            
             // Add dropdown button if parameter has ParamDropdown attribute
             if (property.HasDropdown)
             {
@@ -644,6 +640,10 @@ namespace MCP4Unity.Editor
                 dropdownButton.tooltip = "Click to select from available options";
                 inputContainer.Add(dropdownButton);
             }
+            inputContainer.Add(paramField);
+            currentToolParameterFields[property.Name] = paramField;
+            
+
             
             paramContainer.Add(inputContainer);
             parametersContainer.Add(paramContainer);
