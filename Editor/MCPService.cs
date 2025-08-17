@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -24,6 +25,11 @@ namespace MCP4Unity.Editor
         private const string MCPConsoleFolderName = "Assets/MCP4Unity/MCPConsole~";
         private const string MCPConsoleExeName = "MCPConsole.exe";
         private const string BuildBatName = "build.bat";
+        private const string HistoryPrefKey = "MCP4Unity_ExecutionHistory";
+        
+        // MCP执行历史记录
+        public static List<ToolExecutionHistory> MCPExecutionHistory { get; private set; } = new List<ToolExecutionHistory>();
+        public static Action OnHistoryUpdated;
 
         static JsonSerializerSettings SerializerSettings = new()
         {
@@ -31,6 +37,9 @@ namespace MCP4Unity.Editor
         };
         static MCPService()
         {
+            // 加载持久化的历史记录
+            LoadExecutionHistory();
+            
             // 检查MCPConsole.exe是否存在，如果不存在则运行build.bat
             CheckAndBuildMCPConsole();
             
@@ -180,12 +189,38 @@ namespace MCP4Unity.Editor
                 switch (request.method.ToLower())
                 {
                     case "listtools":
-                        return MCPResponse.Success(MCPFunctionInvoker.GetTools());
+                        var tools = MCPFunctionInvoker.GetTools();
+                        return MCPResponse.Success(tools);
                     case "calltool":
                         ToolArgs toolArgs = JsonConvert.DeserializeObject<ToolArgs>(request.params_);
-                        object res = MCPFunctionInvoker.Invoke(toolArgs.name, toolArgs.arguments);
-                        return MCPResponse.Success(res);
-
+                        
+                        // 准备参数字典用于历史记录
+                        var parameters = new System.Collections.Generic.Dictionary<string, string>();
+                        if (toolArgs.arguments != null)
+                        {
+                            foreach (var prop in toolArgs.arguments.Properties())
+                            {
+                                parameters[prop.Name] = prop.Value?.ToString() ?? "";
+                            }
+                        }
+                        
+                        try
+                        {
+                            object res = MCPFunctionInvoker.Invoke(toolArgs.name, toolArgs.arguments);
+                            string resultStr = res?.ToString() ?? "null";
+                            
+                            // 记录成功的工具调用历史
+                            AddMCPExecutionHistory(toolArgs.name, parameters, resultStr, true);
+                            
+                            return MCPResponse.Success(res);
+                        }
+                        catch (Exception invokeEx)
+                        {
+                            // 记录失败的工具调用历史
+                            AddMCPExecutionHistory(toolArgs.name, parameters, invokeEx.Message, false);
+                            
+                            return MCPResponse.Error(invokeEx);
+                        }
                 }
                 return MCPResponse.Error($"unknown method:{request.method}") ;
             }
@@ -193,6 +228,73 @@ namespace MCP4Unity.Editor
             {
                 Debug.LogError($"Error processing request: {ex.Message}");
                 return MCPResponse.Error(ex);
+            }
+        }
+        
+        /// <summary>
+        /// 添加MCP工具执行历史记录
+        /// </summary>
+        public static void AddMCPExecutionHistory(string toolName, Dictionary<string, string> parameters, string result, bool success)
+        {
+            AddExecutionHistory(toolName, parameters, result, success, ToolExecutionSource.MCP);
+        }
+        
+        /// <summary>
+        /// 添加执行历史记录（通用方法）
+        /// </summary>
+        public static void AddExecutionHistory(string toolName, Dictionary<string, string> parameters, string result, bool success, ToolExecutionSource source)
+        {
+            var historyItem = new ToolExecutionHistory(toolName, parameters, result, success, source);
+            MCPExecutionHistory.Add(historyItem);
+            
+            // 保持最多50条记录
+            if (MCPExecutionHistory.Count > 50)
+            {
+                MCPExecutionHistory.RemoveAt(0);
+            }
+            
+            // 保存历史记录
+            SaveExecutionHistory();
+            
+            // 通知历史更新
+            OnHistoryUpdated?.Invoke();
+        }
+        
+        /// <summary>
+        /// 加载执行历史记录
+        /// </summary>
+        private static void LoadExecutionHistory()
+        {
+            try
+            {
+                string historyJson = EditorPrefs.GetString(HistoryPrefKey, "[]");
+                var historyList = JsonConvert.DeserializeObject<List<ToolExecutionHistory>>(historyJson);
+                if (historyList != null)
+                {
+                    MCPExecutionHistory.Clear();
+                    MCPExecutionHistory.AddRange(historyList);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to load MCP execution history: {ex.Message}");
+                MCPExecutionHistory.Clear();
+            }
+        }
+        
+        /// <summary>
+        /// 保存执行历史记录
+        /// </summary>
+        private static void SaveExecutionHistory()
+        {
+            try
+            {
+                string historyJson = JsonConvert.SerializeObject(MCPExecutionHistory, Formatting.None);
+                EditorPrefs.SetString(HistoryPrefKey, historyJson);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to save MCP execution history: {ex.Message}");
             }
         }
     }
