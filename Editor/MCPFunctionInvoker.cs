@@ -52,7 +52,8 @@ namespace MCP4Unity.Editor
                     for (int i = 0; i < properties.Length; i++)
                     {
                         Type type = properties[i].Type;
-                        JToken jToken = parameters[properties[i].Name];
+                        JToken jToken = parameters.GetValue(properties[i].Name);
+                        object value = jToken?.ToObject(type);
                         objects[i] = jToken?.ToObject(type);
                     }
                     return tool.MethodInfo.Invoke(null, objects);

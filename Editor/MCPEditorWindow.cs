@@ -242,7 +242,7 @@ namespace MCP4Unity.Editor
             toolContent.style.flexGrow = 1;
             toolContent.style.width = new Length(100, LengthUnit.Percent);
             
-            var toolName = new Label($"{tool.name}({tool.inputSchema.orderedProperties.Count})");
+            var toolName = new Label($"{tool.MethodInfo.Name}");
             toolName.style.fontSize = 12;
             toolName.style.unityFontStyleAndWeight = FontStyle.Bold;
             toolName.style.color = new Color(0.9f, 0.9f, 0.9f);

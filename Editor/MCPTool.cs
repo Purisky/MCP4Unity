@@ -121,6 +121,7 @@ namespace MCP4Unity.Editor
         public MCPTool(MethodInfo methodInfo,ToolAttribute toolAttribute)
         {
             MethodInfo = methodInfo;
+
             name = methodInfo.Name.ToLower();
             description = toolAttribute.Desc;
             inputSchema = new();
