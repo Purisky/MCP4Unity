@@ -23,9 +23,11 @@ namespace MCP4Unity.Editor
 
         public static Action OnStateChange;
         private const string MCPConsoleFolderName = "Assets/MCP4Unity/MCPConsole~";
-        private const string MCPConsoleExeName = "MCPConsole.exe";
-        private const string BuildBatName = "build.bat";
         private const string HistoryPrefKey = "MCP4Unity_ExecutionHistory";
+        
+        // 跨平台可执行文件名和构建脚本名
+        private static string MCPConsoleExeName => Application.platform == RuntimePlatform.WindowsEditor ? "MCPConsole.exe" : "MCPConsole";
+        private static string BuildScriptName => Application.platform == RuntimePlatform.WindowsEditor ? "build.bat" : "build.sh";
         
         // MCP执行历史记录
         public static List<ToolExecutionHistory> MCPExecutionHistory { get; private set; } = new List<ToolExecutionHistory>();
@@ -57,7 +59,7 @@ namespace MCP4Unity.Editor
                 string projectPath = Path.GetDirectoryName(Application.dataPath);
                 string mcpConsolePath = Path.Combine(projectPath, MCPConsoleFolderName);
                 string mcpConsoleExePath = Path.Combine(mcpConsolePath, MCPConsoleExeName);
-                string buildBatPath = Path.Combine(mcpConsolePath, BuildBatName);
+                string buildScriptPath = Path.Combine(mcpConsolePath, BuildScriptName);
                 
                 // 检查文件夹是否存在
                 if (!Directory.Exists(mcpConsolePath))
@@ -71,22 +73,41 @@ namespace MCP4Unity.Editor
                 {
                     UnityEngine.Debug.Log($"MCPConsole.exe not found. Running build script...");
                     
-                    // 检查build.bat是否存在
-                    if (!File.Exists(buildBatPath))
+                    // 检查构建脚本是否存在
+                    if (!File.Exists(buildScriptPath))
                     {
-                        UnityEngine.Debug.LogError($"Build script not found at: {buildBatPath}");
+                        UnityEngine.Debug.LogError($"Build script not found at: {buildScriptPath}");
                         return;
                     }
                     
-                    // 运行build.bat
-                    ProcessStartInfo psi = new ()
+                    // 运行构建脚本
+                    ProcessStartInfo psi;
+                    if (Application.platform == RuntimePlatform.WindowsEditor)
                     {
-                        FileName = buildBatPath,
-                        WorkingDirectory = mcpConsolePath,
-                        UseShellExecute = true,
-                        CreateNoWindow = true,
-                        WindowStyle = ProcessWindowStyle.Hidden
-                    };
+                        // Windows: 直接执行批处理文件
+                        psi = new ProcessStartInfo
+                        {
+                            FileName = buildScriptPath,
+                            WorkingDirectory = mcpConsolePath,
+                            UseShellExecute = true,
+                            CreateNoWindow = true,
+                            WindowStyle = ProcessWindowStyle.Hidden
+                        };
+                    }
+                    else
+                    {
+                        // macOS/Linux: 使用bash执行shell脚本
+                        psi = new ProcessStartInfo
+                        {
+                            FileName = "/bin/bash",
+                            Arguments = $"\"{buildScriptPath}\"",
+                            WorkingDirectory = mcpConsolePath,
+                            UseShellExecute = false,
+                            CreateNoWindow = true,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true
+                        };
+                    }
                     
                     using (Process process = Process.Start(psi))
                     {
@@ -95,11 +116,11 @@ namespace MCP4Unity.Editor
                         // 检查编译结果
                         if (File.Exists(mcpConsoleExePath))
                         {
-                            UnityEngine.Debug.Log("MCPConsole.exe successfully built.");
+                            UnityEngine.Debug.Log($"MCPConsole successfully built at: {mcpConsoleExePath}");
                         }
                         else
                         {
-                            UnityEngine.Debug.LogError("Failed to build MCPConsole.exe.");
+                            UnityEngine.Debug.LogError($"Failed to build MCPConsole at: {mcpConsoleExePath}");
                         }
                     }
                 }
