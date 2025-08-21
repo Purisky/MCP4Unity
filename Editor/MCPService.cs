@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -50,7 +50,6 @@ namespace MCP4Unity.Editor
                 Inst.Start();
             }
         }  
-        [MenuItem("MCP4Unity/Check and Build MCPConsole")]
         public static void CheckAndBuildMCPConsole()
         {
             try
