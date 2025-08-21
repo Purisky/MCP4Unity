@@ -6,6 +6,8 @@ using Newtonsoft.Json.Linq;
 using UnityEngine;
 using System.Reflection;
 using System;
+using System.Text.RegularExpressions;
+using System.IO;
 
 namespace MCP4Unity.Editor
 {
@@ -60,6 +62,8 @@ namespace MCP4Unity.Editor
         private bool isDeserializing = false;
         [SerializeField]
         private bool isHistoryCollapsed = false;
+        [SerializeField]
+        private bool isHyperlinkMode = true; // 默认为超链接模式
         
         [MenuItem("Window/MCP Service Manager")]
         public static void ShowWindow()
@@ -73,6 +77,17 @@ namespace MCP4Unity.Editor
         VisualElement historyContainer;
         Dictionary<string, TextField> currentToolParameterFields = new();
         Label currentToolResultLabel;
+        VisualElement currentToolResultContainer; // Container for result content (supports both text and hyperlinks)
+        VisualElement currentToolResultHeader; // Header container with status and toggle button
+        Label currentToolResultHeaderLabel; // Status label in header
+        Button hyperlinkModeToggleButton; // Toggle button for hyperlink/text mode
+        
+        // 双UI元素缓存系统
+        VisualElement textResultElement; // 纯文本显示元素
+        VisualElement hyperlinkResultElement; // 超链接显示元素
+        string cachedResultContent = null; // 缓存的结果内容
+        Color cachedResultColor; // 缓存的结果颜色
+        bool cachedResultIsError = false; // 缓存的错误状态
         MCPTool currentSelectedTool;
         List<MCPTool> availableTools = new List<MCPTool>();
         List<Button> toolButtons = new List<Button>();
@@ -98,6 +113,26 @@ namespace MCP4Unity.Editor
             { "Tool", new System.Collections.Generic.List<string> { "Outdated", "Current" } },
             { "Source", new System.Collections.Generic.List<string> { "UI", "MCP" } }
         };
+        
+        // Stack trace parsing support
+        private static readonly Regex stackTraceRegex = new Regex(@"^\s*at\s+(.+?)\s+(?:\[0x[0-9a-fA-F]+\]\s+)?in\s+(.+?):(\d+)\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+        
+        [Serializable]
+        public class StackTraceItem
+        {
+            public string methodName;
+            public string filePath;
+            public int lineNumber;
+            public string originalLine;
+            
+            public StackTraceItem(string method, string file, int line, string original)
+            {
+                methodName = method;
+                filePath = file;
+                lineNumber = line;
+                originalLine = original;
+            }
+        }
         int selectedHistoryIndex = -1;
         List<VisualElement> historyItemPool = new List<VisualElement>();
         List<ToolExecutionHistory> filteredHistory = new List<ToolExecutionHistory>();
@@ -106,18 +141,25 @@ namespace MCP4Unity.Editor
         {
             VisualElement root = rootVisualElement;
             
+
+            VisualElement top = new VisualElement();
+            top.style.flexDirection = FlexDirection.Row;
+            top.style.alignItems = Align.Center;
+            top.style.justifyContent = Justify.SpaceBetween;
+            root.Add(top);
+
             // Auto start toggle
             Toggle toggle = new("Auto Start")
             {
                 value = EditorPrefs.GetBool("MCP4Unity_Auto_Start", true)
             };
             toggle.RegisterValueChangedCallback(OnToggle);
-            root.Add(toggle);
+            top.Add(toggle);
             
             // Start/Stop button
             startBtn = new Button(OnClickStart) { text = "Start" };
-            startBtn.style.height = 30;
-            root.Add(startBtn);
+            //startBtn.style.height = 30;
+            top.Add(startBtn);
             
 
 
@@ -138,7 +180,7 @@ namespace MCP4Unity.Editor
             // Left column - Tool List
             var leftColumn = new VisualElement();
             leftColumn.style.width = new Length(30, LengthUnit.Percent);
-            leftColumn.style.minWidth = 200;
+            leftColumn.style.minWidth = 180;
             leftColumn.style.maxWidth = 300;
             leftColumn.style.marginRight = 5;
             threeColumnContainer.Add(leftColumn);
@@ -150,7 +192,7 @@ namespace MCP4Unity.Editor
             toolListHeader.style.marginBottom = 10;
             leftColumn.Add(toolListHeader);
             
-            var toolsHeaderLabel = new Label("Available Tools");
+            var toolsHeaderLabel = new Label("Tools");
             toolsHeaderLabel.style.fontSize = 16;
             toolsHeaderLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
             toolsHeaderLabel.style.flexGrow = 1;
@@ -191,6 +233,7 @@ namespace MCP4Unity.Editor
             var middleColumn = new VisualElement();
             middleColumn.style.width = new Length(45, LengthUnit.Percent);
             middleColumn.style.flexGrow = 1;
+            middleColumn.style.minWidth = 300;
             threeColumnContainer.Add(middleColumn);
             
             // Tool details header
@@ -199,7 +242,7 @@ namespace MCP4Unity.Editor
             toolDetailsHeader.style.alignItems = Align.Center;
             toolDetailsHeader.style.marginBottom = 10;
             
-            var toolDetailsLabel = new Label("Tool Details");
+            var toolDetailsLabel = new Label("Details");
             toolDetailsLabel.style.fontSize = 16;
             toolDetailsLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
             toolDetailsLabel.style.flexGrow = 1;
@@ -233,7 +276,7 @@ namespace MCP4Unity.Editor
             // Right column - Execution History
             rightColumn = new VisualElement();
             rightColumn.style.width = new Length(25, LengthUnit.Percent);
-            rightColumn.style.minWidth = 200;
+            rightColumn.style.minWidth = 100;
             rightColumn.style.maxWidth = 350;
             threeColumnContainer.Add(rightColumn);
             
@@ -242,13 +285,14 @@ namespace MCP4Unity.Editor
             historyHeaderContainer.style.flexDirection = FlexDirection.Row;
             historyHeaderContainer.style.alignItems = Align.Center;
             historyHeaderContainer.style.marginBottom = 10;
+            historyHeaderContainer.style.justifyContent = Justify.SpaceBetween;
             rightColumn.Add(historyHeaderContainer);
             
-            historyHeaderLabel = new Label("Execution History");
-            historyHeaderLabel.style.fontSize = 16;
-            historyHeaderLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
-            historyHeaderLabel.style.flexGrow = 1;
-            historyHeaderContainer.Add(historyHeaderLabel);
+            // historyHeaderLabel = new Label("Execution History");
+            // historyHeaderLabel.style.fontSize = 16;
+            // historyHeaderLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            // historyHeaderLabel.style.flexGrow = 1;
+            // historyHeaderContainer.Add(historyHeaderLabel);
             
             // Collapse button
             historyCollapseButton = new Button(ToggleHistoryCollapse);
@@ -485,24 +529,22 @@ namespace MCP4Unity.Editor
                             }
                             
                             // Restore execution result
-                            if (!string.IsNullOrEmpty(lastExecutionResult) && currentToolResultLabel != null)
+                            if (!string.IsNullOrEmpty(lastExecutionResult) && currentToolResultContainer != null)
                             {
-                                currentToolResultLabel.text = lastExecutionResult;
-                                // 根据上次执行是否成功设置颜色
+                                // 根据上次执行是否成功设置颜色和检查是否为错误
                                 if (lastExecutionSuccess)
                                 {
-                                    currentToolResultLabel.style.color = new Color(0.2f, 0.8f, 0.2f); // 绿色表示成功
+                                    SetResultContent(lastExecutionResult, new Color(0.2f, 0.8f, 0.2f), false);
                                 }
                                 else
                                 {
-                                    currentToolResultLabel.style.color = new Color(0.8f, 0.2f, 0.2f); // 红色表示失败
+                                    SetResultContent(lastExecutionResult, new Color(0.8f, 0.2f, 0.2f), true);
                                 }
                             }
-                            else if (currentToolResultLabel != null)
+                            else if (currentToolResultContainer != null)
                             {
                                 // 如果没有执行历史，确保显示默认提示文本和颜色
-                                currentToolResultLabel.text = "Execute the tool to see results here.";
-                                currentToolResultLabel.style.color = new Color(0.7f, 0.7f, 0.7f);
+                                SetResultContent("Execute the tool to see results here.", new Color(0.7f, 0.7f, 0.7f), false);
                             }
                         };
                     }
@@ -833,23 +875,75 @@ namespace MCP4Unity.Editor
             resultContainer.style.paddingLeft = 20;
             resultContainer.style.paddingRight = 20;
             
-            var resultHeader = new Label("Result");
-            resultHeader.style.fontSize = 14;
-            resultHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
-            resultHeader.style.marginBottom = 10;
-            resultHeader.style.color = new Color(0.9f, 0.9f, 0.9f);
-            resultContainer.Add(resultHeader);
+            // var resultHeader = new Label("Result");
+            // resultHeader.style.fontSize = 14;
+            // resultHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
+            // resultHeader.style.marginBottom = 10;
+            // resultHeader.style.color = new Color(0.9f, 0.9f, 0.9f);
+            // resultContainer.Add(resultHeader);
             
+            // Create header container with status and toggle button
+            currentToolResultHeader = new VisualElement();
+            currentToolResultHeader.style.flexDirection = FlexDirection.Row;
+            currentToolResultHeader.style.justifyContent = Justify.SpaceBetween;
+            currentToolResultHeader.style.alignItems = Align.Center;
+            currentToolResultHeader.style.marginBottom = 10;
+            
+            // Status label
+            currentToolResultHeaderLabel = new Label("Result");
+            currentToolResultHeaderLabel.style.fontSize = 14;
+            currentToolResultHeaderLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            currentToolResultHeaderLabel.style.color = new Color(0.9f, 0.9f, 0.9f);
+            currentToolResultHeader.Add(currentToolResultHeaderLabel);
+            
+            // Toggle button for hyperlink/text mode
+            hyperlinkModeToggleButton = new Button(() => ToggleHyperlinkMode());
+            hyperlinkModeToggleButton.text = isHyperlinkMode ? "🔗" : "📄";
+            hyperlinkModeToggleButton.style.fontSize = 12;
+            hyperlinkModeToggleButton.style.paddingLeft = 8;
+            hyperlinkModeToggleButton.style.paddingRight = 8;
+            hyperlinkModeToggleButton.style.paddingTop = 4;
+            hyperlinkModeToggleButton.style.paddingBottom = 4;
+            hyperlinkModeToggleButton.style.backgroundColor = new Color(0.3f, 0.3f, 0.3f);
+            hyperlinkModeToggleButton.style.borderLeftColor = new Color(0.5f, 0.5f, 0.5f);
+            hyperlinkModeToggleButton.style.borderRightColor = new Color(0.5f, 0.5f, 0.5f);
+            hyperlinkModeToggleButton.style.borderTopColor = new Color(0.5f, 0.5f, 0.5f);
+            hyperlinkModeToggleButton.style.borderBottomColor = new Color(0.5f, 0.5f, 0.5f);
+            hyperlinkModeToggleButton.style.borderLeftWidth = 1;
+            hyperlinkModeToggleButton.style.borderRightWidth = 1;
+            hyperlinkModeToggleButton.style.borderTopWidth = 1;
+            hyperlinkModeToggleButton.style.borderBottomWidth = 1;
+            hyperlinkModeToggleButton.style.borderTopLeftRadius = 4;
+            hyperlinkModeToggleButton.style.borderTopRightRadius = 4;
+            hyperlinkModeToggleButton.style.borderBottomLeftRadius = 4;
+            hyperlinkModeToggleButton.style.borderBottomRightRadius = 4;
+            currentToolResultHeader.Add(hyperlinkModeToggleButton);
+            
+            resultContainer.Add(currentToolResultHeader);
+            
+            // Create result content container
+            currentToolResultContainer = new VisualElement();
+            currentToolResultContainer.style.backgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.5f);
+            currentToolResultContainer.style.paddingTop = 10;
+            currentToolResultContainer.style.paddingBottom = 10;
+            currentToolResultContainer.style.paddingLeft = 15;
+            currentToolResultContainer.style.paddingRight = 15;
+            
+            // Add initial label
             currentToolResultLabel = new Label("Execute the tool to see results here.");
             currentToolResultLabel.style.fontSize = 12;
             currentToolResultLabel.style.whiteSpace = WhiteSpace.Normal;
             currentToolResultLabel.style.color = new Color(0.7f, 0.7f, 0.7f);
-            currentToolResultLabel.style.backgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.5f);
-            currentToolResultLabel.style.paddingTop = 10;
-            currentToolResultLabel.style.paddingBottom = 10;
-            currentToolResultLabel.style.paddingLeft = 15;
-            currentToolResultLabel.style.paddingRight = 15;
-            resultContainer.Add(currentToolResultLabel);
+            currentToolResultContainer.Add(currentToolResultLabel);
+            
+            resultContainer.Add(currentToolResultContainer);
+            
+            // 初始化header状态显示
+            if (currentToolResultHeaderLabel != null)
+            {
+                currentToolResultHeaderLabel.text = "Result";
+                currentToolResultHeaderLabel.style.color = new Color(0.9f, 0.9f, 0.9f);
+            }
             
             toolDetailsContainer.Add(resultContainer);
         }
@@ -1032,8 +1126,7 @@ namespace MCP4Unity.Editor
             try
             {
                 // Clear previous result
-                currentToolResultLabel.text = "Executing...";
-                currentToolResultLabel.style.color = new Color(0.8f, 0.8f, 0.2f);
+                SetResultContent("Executing...", new Color(0.8f, 0.8f, 0.2f), false);
                 
                 // Build parameters JObject
                 var parameters = new JObject();
@@ -1088,9 +1181,10 @@ namespace MCP4Unity.Editor
                 
                 // Display result
                 string resultText = result?.ToString() ?? "null";
+                string successText = $"{resultText}"; // 移除 "✓ Success: " 前缀
                 
-                currentToolResultLabel.text = $"✓ Success: \n{resultText}";
-                currentToolResultLabel.style.color = new Color(0.2f, 0.8f, 0.2f);
+                SetResultContent(successText, new Color(0.2f, 0.8f, 0.2f), false);
+                UpdateResultHeaderStatus(true); // 更新header状态显示
                 
                 // Add to history
                 var parameterDict = new Dictionary<string, string>();
@@ -1098,7 +1192,7 @@ namespace MCP4Unity.Editor
                 {
                     parameterDict[field.Key] = field.Value.value ?? "";
                 }
-                AddToHistory(currentSelectedTool.name, parameterDict, currentToolResultLabel.text, true);
+                AddToHistory(currentSelectedTool.name, parameterDict, successText, true);
                 
                 isViewingHistory = false; // Reset viewing history flag
                 
@@ -1106,9 +1200,9 @@ namespace MCP4Unity.Editor
             }
             catch (System.Exception ex)
             {
-                string errorText = $"✗ Error: {ex.Message}";
-                currentToolResultLabel.text = errorText;
-                currentToolResultLabel.style.color = new Color(0.8f, 0.2f, 0.2f);
+                string errorText = $"{ex}"; // 移除 "✗ Error:" 前缀
+                SetResultContent(errorText, new Color(0.8f, 0.2f, 0.2f), true);
+                UpdateResultHeaderStatus(false); // 更新header状态显示
                 
                 // Add to history even for errors
                 var parameterDict = new Dictionary<string, string>();
@@ -1148,18 +1242,16 @@ namespace MCP4Unity.Editor
                 }
                 
                 // Save execution result
-                if (currentToolResultLabel != null)
+                if (currentToolResultContainer != null)
                 {
-                    var currentText = currentToolResultLabel.text;
+                    var currentText = GetCurrentResultText();
                     // 只保存真正的执行结果，不保存默认提示文本
                     if (!string.IsNullOrEmpty(currentText) && 
                         currentText != "Execute the tool to see results here." &&
                         currentText != "Executing...")
                     {
                         lastExecutionResult = currentText;
-                        // 通过颜色判断是否成功执行（绿色表示成功，红色表示失败）
-                        var color = currentToolResultLabel.style.color.value;
-                        lastExecutionSuccess = (color.r < 0.5f && color.g > 0.5f); // 绿色色调判断
+                        // 成功/失败状态已经在执行时设置好了，不需要根据文本内容判断
                     }
                     else
                     {
@@ -1657,12 +1749,12 @@ namespace MCP4Unity.Editor
                 displayedIndex++;
             }
         }
-        
+
         void CreateHistoryToolUI(ToolExecutionHistory history)
         {
             toolDetailsContainer.Clear();
             currentToolParameterFields.Clear();
-            
+
             // Tool header with warning
             var headerContainer = new VisualElement();
             headerContainer.style.backgroundColor = new Color(0.15f, 0.15f, 0.15f, 0.8f);
@@ -1673,18 +1765,18 @@ namespace MCP4Unity.Editor
             headerContainer.style.marginBottom = 15;
             headerContainer.style.borderLeftWidth = 4;
             headerContainer.style.borderLeftColor = new Color(0.8f, 0.6f, 0.2f); // Orange warning color
-            
+
             var titleContainer = new VisualElement();
             titleContainer.style.flexDirection = FlexDirection.Row;
             titleContainer.style.alignItems = Align.Center;
             titleContainer.style.marginBottom = 8;
-            
+
             var nameLabel = new Label(history.toolName);
             nameLabel.style.fontSize = 18;
             nameLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
             nameLabel.style.color = new Color(0.9f, 0.9f, 0.9f);
             titleContainer.Add(nameLabel);
-            
+
             var warningBadge = new Label("[TOOL NOT FOUND]");
             warningBadge.style.fontSize = 12;
             warningBadge.style.marginLeft = 15;
@@ -1695,17 +1787,17 @@ namespace MCP4Unity.Editor
             warningBadge.style.paddingTop = 2;
             warningBadge.style.paddingBottom = 2;
             titleContainer.Add(warningBadge);
-            
+
             headerContainer.Add(titleContainer);
-            
+
             var warningLabel = new Label("This tool is no longer available. Parameters shown are read-only.");
             warningLabel.style.fontSize = 12;
             warningLabel.style.color = new Color(0.8f, 0.6f, 0.2f);
             warningLabel.style.marginBottom = 5;
             headerContainer.Add(warningLabel);
-            
+
             toolDetailsContainer.Add(headerContainer);
-            
+
             // Parameters section
             if (history.parameterNames.Count > 0)
             {
@@ -1716,45 +1808,72 @@ namespace MCP4Unity.Editor
                 parametersHeader.style.marginLeft = 20;
                 parametersHeader.style.color = new Color(0.9f, 0.9f, 0.9f);
                 toolDetailsContainer.Add(parametersHeader);
-                
+
                 var parametersContainer = new VisualElement();
                 parametersContainer.style.paddingLeft = 20;
                 parametersContainer.style.paddingRight = 20;
                 parametersContainer.style.marginBottom = 20;
-                
+
                 for (int i = 0; i < history.parameterNames.Count && i < history.parameterValues.Count; i++)
                 {
                     CreateHistoryParameterUI(parametersContainer, history.parameterNames[i], history.parameterValues[i]);
                 }
-                
+
                 toolDetailsContainer.Add(parametersContainer);
             }
-            
+
             // Result section
             var resultContainer = new VisualElement();
             resultContainer.style.paddingLeft = 20;
             resultContainer.style.paddingRight = 20;
-            
-            var resultHeader = new Label("Historical Result");
+
+            var resultHeader = new Label($"Historical Result:{(history.executionSuccess ? "✓ Success" : "✗ Error")}");
             resultHeader.style.fontSize = 14;
             resultHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
             resultHeader.style.marginBottom = 10;
-            resultHeader.style.color = new Color(0.9f, 0.9f, 0.9f);
-            resultContainer.Add(resultHeader);
-            
-            currentToolResultLabel = new Label(history.executionResult);
-            currentToolResultLabel.style.fontSize = 12;
-            currentToolResultLabel.style.whiteSpace = WhiteSpace.Normal;
-            currentToolResultLabel.style.color = history.executionSuccess ? 
+            resultHeader.style.color = history.executionSuccess ?
                 new Color(0.2f, 0.8f, 0.2f) : new Color(0.8f, 0.2f, 0.2f);
-            currentToolResultLabel.style.backgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.5f);
-            currentToolResultLabel.style.paddingTop = 10;
-            currentToolResultLabel.style.paddingBottom = 10;
-            currentToolResultLabel.style.paddingLeft = 15;
-            currentToolResultLabel.style.paddingRight = 15;
-            resultContainer.Add(currentToolResultLabel);
-            
+            resultContainer.Add(resultHeader);
+
+            // Create result content container for history
+            var historyResultContainer = new VisualElement();
+            historyResultContainer.style.backgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.5f);
+            historyResultContainer.style.paddingTop = 10;
+            historyResultContainer.style.paddingBottom = 10;
+            historyResultContainer.style.paddingLeft = 15;
+            historyResultContainer.style.paddingRight = 15;
+
+            // Determine colors and if it's an error
+            var textColor = history.executionSuccess ?
+                new Color(0.2f, 0.8f, 0.2f) : new Color(0.8f, 0.2f, 0.2f);
+            bool isError = !history.executionSuccess;
+
+            // Check if this is an error with potential stack trace and hyperlink mode is enabled
+            if (isError && isHyperlinkMode && history.executionResult.Contains("at ") &&
+                history.executionResult.Contains(" in "))
+            {
+                // Create hyperlink UI for stack trace
+                var stackTraceUI = CreateStackTraceUI(history.executionResult, textColor);
+                historyResultContainer.Add(stackTraceUI);
+            }
+            else
+            {
+                // Use regular label
+                currentToolResultLabel = new Label(history.executionResult);
+                currentToolResultLabel.style.fontSize = 12;
+                currentToolResultLabel.style.whiteSpace = WhiteSpace.Normal;
+                currentToolResultLabel.style.color = textColor;
+                // 确保文本能正确换行
+                currentToolResultLabel.style.overflow = Overflow.Visible;
+                currentToolResultLabel.style.flexWrap = Wrap.Wrap;
+                currentToolResultLabel.style.maxWidth = StyleKeyword.None;
+                historyResultContainer.Add(currentToolResultLabel);
+            }
+
+            resultContainer.Add(historyResultContainer);
+
             toolDetailsContainer.Add(resultContainer);
+
         }
         
         void CreateHistoryParameterUI(VisualElement parametersContainer, string paramName, string paramValue)
@@ -1789,6 +1908,9 @@ namespace MCP4Unity.Editor
         
         void RestoreHistoryState(ToolExecutionHistory history, bool toolExists)
         {
+            // 切换历史记录时清除结果缓存
+            ClearResultCache();
+            
             // Restore parameter values
             for (int i = 0; i < history.parameterNames.Count && i < history.parameterValues.Count; i++)
             {
@@ -1803,12 +1925,15 @@ namespace MCP4Unity.Editor
                 }
             }
             
-            // Restore execution result
-            if (currentToolResultLabel != null)
+            // Restore execution result using SetResultContent to preserve hyperlinks
+            if (!string.IsNullOrEmpty(history.executionResult))
             {
-                currentToolResultLabel.text = history.executionResult;
-                currentToolResultLabel.style.color = history.executionSuccess ? 
+                var textColor = history.executionSuccess ? 
                     new Color(0.2f, 0.8f, 0.2f) : new Color(0.8f, 0.2f, 0.2f);
+                bool isError = !history.executionSuccess;
+                
+                SetResultContent(history.executionResult, textColor, isError);
+                UpdateResultHeaderStatus(history.executionSuccess); // 更新结果头部状态
             }
             
             // Hide execute button if tool doesn't exist or parameters don't match
@@ -1879,6 +2004,602 @@ namespace MCP4Unity.Editor
                 {
                     historyCollapseButton.text = "◀";
                 }
+            }
+        }
+        
+        // Stack trace parsing and hyperlink support methods
+        
+        /// <summary>
+        /// Sets the result content with dual UI element caching system
+        /// </summary>
+        private void SetResultContent(string content, Color textColor, bool isError = false)
+        {
+            if (currentToolResultContainer == null) return;
+            
+            // 检查是否需要重新创建UI元素
+            bool needsRecreate = cachedResultContent != content || 
+                                 cachedResultColor.r != textColor.r || 
+                                 cachedResultColor.g != textColor.g || 
+                                 cachedResultColor.b != textColor.b || 
+                                 cachedResultIsError != isError;
+            
+            if (needsRecreate)
+            {
+                // 清除现有内容
+                currentToolResultContainer.Clear();
+                
+                // 更新缓存信息
+                cachedResultContent = content;
+                cachedResultColor = textColor;
+                cachedResultIsError = isError;
+                
+                // 创建纯文本UI元素
+                CreateTextResultElement(content, textColor);
+                
+                // 创建超链接UI元素（如果适用）
+                if (isError && content.Contains("at ") && content.Contains(" in "))
+                {
+                    CreateHyperlinkResultElement(content, textColor);
+                }
+                else
+                {
+                    // 如果不是错误或没有堆栈跟踪，超链接元素就是文本元素的副本
+                    hyperlinkResultElement = null;
+                }
+                
+                // 将两个元素都添加到容器中
+                currentToolResultContainer.Add(textResultElement);
+                if (hyperlinkResultElement != null)
+                {
+                    currentToolResultContainer.Add(hyperlinkResultElement);
+                }
+            }
+            
+            // 根据当前模式显示/隐藏对应的元素
+            UpdateResultDisplay();
+        }
+        
+        /// <summary>
+        /// 创建纯文本结果元素
+        /// </summary>
+        private void CreateTextResultElement(string content, Color textColor)
+        {
+            textResultElement = new VisualElement();
+            
+            currentToolResultLabel = new Label(content);
+            currentToolResultLabel.style.fontSize = 12;
+            currentToolResultLabel.style.whiteSpace = WhiteSpace.Normal;
+            currentToolResultLabel.style.color = textColor;
+            currentToolResultLabel.style.overflow = Overflow.Visible;
+            currentToolResultLabel.style.flexWrap = Wrap.Wrap;
+            currentToolResultLabel.style.maxWidth = StyleKeyword.None;
+            
+            textResultElement.Add(currentToolResultLabel);
+        }
+        
+        /// <summary>
+        /// 创建超链接结果元素
+        /// </summary>
+        private void CreateHyperlinkResultElement(string content, Color textColor)
+        {
+            hyperlinkResultElement = CreateStackTraceUI(content, textColor);
+        }
+        
+        /// <summary>
+        /// 根据当前模式更新结果显示
+        /// </summary>
+        private void UpdateResultDisplay()
+        {
+            if (textResultElement == null) return;
+            
+            bool shouldShowHyperlink = isHyperlinkMode && hyperlinkResultElement != null;
+            
+            // 显示/隐藏纯文本元素
+            textResultElement.style.display = shouldShowHyperlink ? DisplayStyle.None : DisplayStyle.Flex;
+            
+            // 显示/隐藏超链接元素
+            if (hyperlinkResultElement != null)
+            {
+                hyperlinkResultElement.style.display = shouldShowHyperlink ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+        }
+        
+        /// <summary>
+        /// 清除结果UI缓存
+        /// </summary>
+        private void ClearResultCache()
+        {
+            cachedResultContent = null;
+            textResultElement = null;
+            hyperlinkResultElement = null;
+            cachedResultColor = default(Color);
+            cachedResultIsError = false;
+        }
+        
+        /// <summary>
+        /// Gets the current result text content
+        /// </summary>
+        private string GetCurrentResultText()
+        {
+            if (currentToolResultLabel != null)
+            {
+                return currentToolResultLabel.text ?? "";
+            }
+            
+            // If using hyperlink UI, we need to extract text from the container
+            if (currentToolResultContainer != null && currentToolResultContainer.childCount > 0)
+            {
+                var firstChild = currentToolResultContainer[0];
+                if (firstChild is Label label)
+                {
+                    return label.text ?? "";
+                }
+                else if (firstChild is VisualElement container)
+                {
+                    // Extract text from hyperlink container - this is a simplified approach
+                    var textParts = new List<string>();
+                    ExtractTextFromElement(container, textParts);
+                    return string.Join("", textParts);
+                }
+            }
+            
+            return "";
+        }
+        
+        /// <summary>
+        /// Recursively extracts text from UI elements
+        /// </summary>
+        private void ExtractTextFromElement(VisualElement element, List<string> textParts)
+        {
+            if (element is Label label)
+            {
+                textParts.Add(label.text ?? "");
+            }
+            else if (element is Button button)
+            {
+                textParts.Add(button.text ?? "");
+            }
+            
+            // Recursively process children
+            for (int i = 0; i < element.childCount; i++)
+            {
+                ExtractTextFromElement(element[i], textParts);
+            }
+        }
+        
+        /// <summary>
+        /// Parses exception text and extracts stack trace items
+        /// </summary>
+        private List<StackTraceItem> ParseStackTrace(string exceptionText)
+        {
+            var stackTraceItems = new List<StackTraceItem>();
+            if (string.IsNullOrEmpty(exceptionText))
+                return stackTraceItems;
+                
+            var matches = stackTraceRegex.Matches(exceptionText);
+            foreach (Match match in matches)
+            {
+                if (match.Success && match.Groups.Count >= 4)
+                {
+                    string methodName = match.Groups[1].Value.Trim();
+                    string filePath = match.Groups[2].Value.Trim();
+                    if (Regex.IsMatch(filePath, @"^<[a-fA-F0-9]+>$"))
+                    {
+                        continue; // 跳过无效地址
+                    }
+                    
+                    if (int.TryParse(match.Groups[3].Value, out int lineNumber))
+                    {
+                        stackTraceItems.Add(new StackTraceItem(methodName, filePath, lineNumber, match.Value));
+                    }
+                }
+            }
+            
+            return stackTraceItems;
+        }
+        
+        /// <summary>
+        /// Creates a UI element with hyperlinks for stack trace
+        /// </summary>
+        private VisualElement CreateStackTraceUI(string exceptionText, Color textColor)
+        {
+            var container = new VisualElement();
+            container.style.whiteSpace = WhiteSpace.Normal;
+            container.style.flexWrap = Wrap.Wrap;
+            container.style.overflow = Overflow.Visible;
+            
+            var stackTraceItems = ParseStackTrace(exceptionText);
+            
+            if (stackTraceItems.Count == 0)
+            {
+                // No stack trace found, use regular label
+                var label = new Label(exceptionText);
+                label.style.color = textColor;
+                label.style.fontSize = 12;
+                label.style.whiteSpace = WhiteSpace.Normal;
+                // 确保文本能正确换行
+                label.style.overflow = Overflow.Visible;
+                label.style.flexWrap = Wrap.Wrap;
+                label.style.maxWidth = StyleKeyword.None;
+                container.Add(label);
+                return container;
+            }
+            
+            // Split text by lines and create UI elements
+            var lines = exceptionText.Split('\n');
+            foreach (var line in lines)
+            {
+                var lineContainer = new VisualElement();
+                lineContainer.style.flexDirection = FlexDirection.Row;
+                lineContainer.style.flexWrap = Wrap.Wrap;
+                
+                // Check if this line contains a stack trace
+                var stackItem = stackTraceItems.FirstOrDefault(item => line.Contains(item.originalLine.Trim()));
+                
+                if (stackItem != null)
+                {
+                    // Create hyperlink for stack trace line
+                    CreateStackTraceHyperlink(lineContainer, line, stackItem, textColor);
+                }
+                else
+                {
+                    // Regular text line
+                    var label = new Label(line);
+                    label.style.color = textColor;
+                    label.style.fontSize = 12;
+                    label.style.whiteSpace = WhiteSpace.Normal;
+                    // 确保文本能正确换行
+                    label.style.overflow = Overflow.Visible;
+                    label.style.flexWrap = Wrap.Wrap;
+                    label.style.maxWidth = StyleKeyword.None;
+                    lineContainer.Add(label);
+                }
+                
+                container.Add(lineContainer);
+            }
+            
+            return container;
+        }
+        
+        /// <summary>
+        /// Creates a hyperlink for a stack trace line
+        /// </summary>
+        private void CreateStackTraceHyperlink(VisualElement container, string line, StackTraceItem stackItem, Color baseColor)
+        {
+            // Find the file path part in the line
+            int atIndex = line.IndexOf("at ");
+            int inIndex = line.IndexOf(" in ");
+            
+            if (atIndex >= 0 && inIndex > atIndex)
+            {
+                // Add prefix text (usually spaces and "at")
+                if (atIndex > 0)
+                {
+                    var prefixLabel = new Label(line.Substring(0, atIndex));
+                    prefixLabel.style.color = baseColor;
+                    prefixLabel.style.fontSize = 12;
+                    container.Add(prefixLabel);
+                }
+                
+                // Add "at " text
+                var atLabel = new Label("at ");
+                atLabel.style.color = baseColor;
+                atLabel.style.fontSize = 12;
+                container.Add(atLabel);
+                
+                // Find method name and hex address part
+                string middlePart = line.Substring(atIndex + 3, inIndex - atIndex - 3);
+                
+                // 优化方法名显示：移除冗长命名空间并简化基础类型
+                string optimizedMethodText = GetOptimizedMethodDisplay(middlePart);
+                var methodLabel = new Label(optimizedMethodText);
+                methodLabel.style.color = baseColor;
+                methodLabel.style.fontSize = 12;
+                // 确保文本能正确换行
+                methodLabel.style.whiteSpace = WhiteSpace.Normal;
+                methodLabel.style.overflow = Overflow.Visible;
+                methodLabel.style.flexWrap = Wrap.Wrap;
+                methodLabel.style.maxWidth = StyleKeyword.None;
+                container.Add(methodLabel);
+                
+                // Add " in " text
+                var inLabel = new Label(" in ");
+                inLabel.style.color = baseColor;
+                inLabel.style.fontSize = 12;
+                container.Add(inLabel);
+                
+                // Add clickable file path with optimized display
+                string filePart = line.Substring(inIndex + 4);
+                string optimizedDisplay = GetOptimizedPathDisplay(stackItem.filePath) + ":" + stackItem.lineNumber;
+                var fileButton = new Button(() => OpenFileAtLine(stackItem.filePath, stackItem.lineNumber));
+                fileButton.text = optimizedDisplay;
+                fileButton.style.backgroundColor = Color.clear;
+                fileButton.style.borderTopWidth = 0;
+                fileButton.style.borderBottomWidth = 0;
+                fileButton.style.borderLeftWidth = 0;
+                fileButton.style.borderRightWidth = 0;
+                fileButton.style.paddingTop = 0;
+                fileButton.style.paddingBottom = 0;
+                fileButton.style.paddingLeft = 0;
+                fileButton.style.paddingRight = 0;
+                fileButton.style.marginTop = 0;
+                fileButton.style.marginBottom = 0;
+                fileButton.style.marginLeft = 0;
+                fileButton.style.marginRight = 0;
+                fileButton.style.color = new Color(0.4f, 0.6f, 1.0f); // Blue hyperlink color
+                fileButton.style.fontSize = 12;
+                fileButton.style.unityTextAlign = TextAnchor.MiddleLeft;
+                // 确保文件路径按钮能正确换行
+                fileButton.style.whiteSpace = WhiteSpace.Normal;
+                fileButton.style.overflow = Overflow.Visible;
+                fileButton.style.flexWrap = Wrap.Wrap;
+                fileButton.style.maxWidth = StyleKeyword.None;
+                
+                // Add hover effect
+                fileButton.RegisterCallback<MouseEnterEvent>(evt =>
+                {
+                    fileButton.style.color = new Color(0.6f, 0.8f, 1.0f);
+                    // Note: Unity's FontStyle doesn't have Underline, using color change instead
+                });
+                
+                fileButton.RegisterCallback<MouseLeaveEvent>(evt =>
+                {
+                    fileButton.style.color = new Color(0.4f, 0.6f, 1.0f);
+                });
+                
+                container.Add(fileButton);
+            }
+            else
+            {
+                // Fallback: treat whole line as regular text
+                var label = new Label(line);
+                label.style.color = baseColor;
+                label.style.fontSize = 12;
+                // 确保文本能正确换行
+                label.style.whiteSpace = WhiteSpace.Normal;
+                label.style.overflow = Overflow.Visible;
+                label.style.flexWrap = Wrap.Wrap;
+                label.style.maxWidth = StyleKeyword.None;
+                container.Add(label);
+            }
+        }
+        
+        /// <summary>
+        /// 优化方法名显示，移除冗长的命名空间并简化基础类型名称
+        /// </summary>
+        private string GetOptimizedMethodDisplay(string originalMethodText)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(originalMethodText))
+                    return originalMethodText;
+                
+                string optimized = originalMethodText;
+                
+                // 移除常见的命名空间前缀
+                var namespacesToRemove = new string[]
+                {
+                    "TreeNode.Runtime.",
+                    "TreeNode.Editor.",
+                    "TreeNode.Utility.",
+                    "System.Collections.Generic.",
+                    "System.Collections.",
+                    "System.",
+                    "UnityEngine.",
+                    "UnityEditor.",
+                    "Microsoft.CSharp.",
+                    "SkillEditorDemo."
+                };
+                
+                foreach (var ns in namespacesToRemove)
+                {
+                    optimized = optimized.Replace(ns, "");
+                }
+                
+                // 简化基础类型名称
+                var typeReplacements = new Dictionary<string, string>
+                {
+                    { "System.String", "string" },
+                    { "System.Int32", "int" },
+                    { "System.Int64", "long" },
+                    { "System.Int16", "short" },
+                    { "System.UInt32", "uint" },
+                    { "System.UInt64", "ulong" },
+                    { "System.UInt16", "ushort" },
+                    { "System.Byte", "byte" },
+                    { "System.SByte", "sbyte" },
+                    { "System.Boolean", "bool" },
+                    { "System.Single", "float" },
+                    { "System.Double", "double" },
+                    { "System.Decimal", "decimal" },
+                    { "System.Char", "char" },
+                    { "System.Object", "object" },
+                    { "System.Void", "void" },
+                    
+                    // 处理已经简化的类型（去掉System.前缀后的）
+                    { "String", "string" },
+                    { "Int32", "int" },
+                    { "Int64", "long" },
+                    { "Int16", "short" },
+                    { "UInt32", "uint" },
+                    { "UInt64", "ulong" },
+                    { "UInt16", "ushort" },
+                    { "Byte", "byte" },
+                    { "SByte", "sbyte" },
+                    { "Boolean", "bool" },
+                    { "Single", "float" },
+                    { "Double", "double" },
+                    { "Decimal", "decimal" },
+                    { "Char", "char" },
+                    { "Object", "object" },
+                    { "Void", "void" },
+                    
+                    // 集合类型简化
+                    { "IList", "IList" },
+                    { "ICollection", "ICollection" },
+                    { "IEnumerable", "IEnumerable" },
+                    { "List", "List" },
+                    { "Dictionary", "Dictionary" }
+                };
+                
+                foreach (var replacement in typeReplacements)
+                {
+                    // 使用词边界匹配，避免替换部分单词
+                    optimized = System.Text.RegularExpressions.Regex.Replace(
+                        optimized, 
+                        @"\b" + System.Text.RegularExpressions.Regex.Escape(replacement.Key) + @"\b", 
+                        replacement.Value);
+                }
+                
+                return optimized;
+            }
+            catch (System.Exception)
+            {
+                // 出错时返回原始文本
+                return originalMethodText;
+            }
+        }
+        
+        /// <summary>
+        /// 优化文件路径显示，项目内文件显示相对路径，项目外文件显示绝对路径
+        /// </summary>
+        private string GetOptimizedPathDisplay(string originalPath)
+        {
+            try
+            {
+                // 标准化路径分隔符
+                string normalizedPath = originalPath.Replace('\\', '/');
+                
+                // 获取项目根目录路径
+                string projectPath = Application.dataPath.Replace("/Assets", "").Replace('\\', '/');
+                
+                // 检查是否为项目内路径
+                if (normalizedPath.StartsWith(projectPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    // 计算相对于项目根目录的路径
+                    string relativePath = normalizedPath.Substring(projectPath.Length);
+                    if (relativePath.StartsWith("/"))
+                        relativePath = relativePath.Substring(1);
+                    return relativePath;
+                }
+                
+                // 检查是否为Assets路径（相对路径）
+                if (normalizedPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                {
+                    return normalizedPath;
+                }
+                
+                // 尝试在项目中查找同名文件
+                string fileName = Path.GetFileName(normalizedPath);
+                string[] guids = AssetDatabase.FindAssets($"t:Script {Path.GetFileNameWithoutExtension(fileName)}");
+                foreach (string guid in guids)
+                {
+                    string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                    if (assetPath.EndsWith(fileName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return assetPath; // 返回项目内的相对路径
+                    }
+                }
+                
+                // 如果不是项目内文件，返回绝对路径
+                return originalPath;
+            }
+            catch (Exception)
+            {
+                // 出错时返回原始路径
+                return originalPath;
+            }
+        }
+        
+        /// <summary>
+        /// Opens a file at the specified line in Unity editor
+        /// </summary>
+        private void OpenFileAtLine(string filePath, int lineNumber)
+        {
+            try
+            {
+                // Normalize path separators
+                string normalizedPath = filePath.Replace('\\', '/');
+                
+                // Try to find the file in the project
+                string[] guids = AssetDatabase.FindAssets("t:Script");
+                foreach (string guid in guids)
+                {
+                    string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                    if (assetPath.EndsWith(Path.GetFileName(normalizedPath), StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Open the script at the specified line
+                        UnityEditorInternal.InternalEditorUtility.OpenFileAtLineExternal(assetPath, lineNumber);
+                        return;
+                    }
+                }
+                
+                // If not found in assets, try to open directly if the file exists
+                if (File.Exists(normalizedPath))
+                {
+                    UnityEditorInternal.InternalEditorUtility.OpenFileAtLineExternal(normalizedPath, lineNumber);
+                }
+                else
+                {
+                    Debug.LogWarning($"Could not find file: {filePath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Error opening file {filePath} at line {lineNumber}: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// 切换超链接模式和纯文本模式
+        /// </summary>
+        private void ToggleHyperlinkMode()
+        {
+            isHyperlinkMode = !isHyperlinkMode;
+            
+            // 更新按钮文本
+            if (hyperlinkModeToggleButton != null)
+            {
+                hyperlinkModeToggleButton.text = isHyperlinkMode ? "🔗" : "📄";
+            }
+            
+            // 刷新当前结果显示
+            RefreshCurrentResultDisplay();
+        }
+        
+        /// <summary>
+        /// 刷新当前结果显示（仅切换显示模式，不重新创建内容）
+        /// </summary>
+        private void RefreshCurrentResultDisplay()
+        {
+            // 如果已有缓存的结果，只需要切换显示模式
+            if (textResultElement != null)
+            {
+                UpdateResultDisplay();
+            }
+            // 如果没有缓存，则使用完整的设置流程
+            else if (currentToolResultContainer != null && !string.IsNullOrEmpty(lastExecutionResult))
+            {
+                string content = lastExecutionResult;
+                Color textColor = lastExecutionSuccess ? new Color(0.2f, 0.8f, 0.2f) : new Color(0.8f, 0.2f, 0.2f);
+                SetResultContent(content, textColor, !lastExecutionSuccess);
+            }
+        }
+        
+        /// <summary>
+        /// 更新结果头部状态显示
+        /// </summary>
+        private void UpdateResultHeaderStatus(bool isSuccess)
+        {
+            if (currentToolResultHeaderLabel != null)
+            {
+                string statusIcon = isSuccess ? "✓" : "✗";
+                string statusText = isSuccess ? "Success" : "Error";
+                currentToolResultHeaderLabel.text = $"Result:{statusIcon} {statusText}";
+                
+                // 设置状态颜色
+                Color statusColor = isSuccess ? new Color(0.2f, 0.8f, 0.2f) : new Color(0.8f, 0.2f, 0.2f);
+                currentToolResultHeaderLabel.style.color = statusColor;
             }
         }
     }

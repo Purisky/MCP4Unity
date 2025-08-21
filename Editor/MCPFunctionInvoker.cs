@@ -60,12 +60,10 @@ namespace MCP4Unity.Editor
                 }
                 catch (Exception e)
                 {
-                    Debug.LogError(e);
-                    //Debug.Log(e.Message);
-                    return e.ToString();
+                    throw e;
                 }
             }
-            return $"Tool {functionName} not found";
+            throw new Exception( $"Tool {functionName} not found");
         }
 
         public static Tools GetTools()
