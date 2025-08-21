@@ -96,10 +96,13 @@ namespace MCP4Unity.Editor
                     else
                     {
                         // macOS/Linux: 使用bash执行shell脚本，设置PATH环境变量
+                        // 检测系统原生架构并强制使用，避免从Unity的x86_64继承错误架构
+                        string nativeArch = GetNativeArchitecture();
+                        Debug.Log($"Detected native architecture: {nativeArch}" );
                         psi = new ProcessStartInfo
                         {
-                            FileName = "/bin/bash",
-                            Arguments = $"\"{buildScriptPath}\"",
+                            FileName = "arch",
+                            Arguments = $"-{nativeArch} /bin/bash \"{buildScriptPath}\"",
                             WorkingDirectory = mcpConsolePath,
                             UseShellExecute = false,
                             CreateNoWindow = true,
@@ -190,6 +193,92 @@ namespace MCP4Unity.Editor
                 UnityEngine.Debug.LogError($"Error checking/building MCPConsole: {ex.Message}");
             }
         }
+        
+        /// <summary>
+        /// 获取系统的原生架构
+        /// </summary>
+        private static string GetNativeArchitecture()
+        {
+            try
+            {
+                // 在macOS上使用sysctl来获取真实的硬件架构，不受当前进程架构影响
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "sysctl",
+                    Arguments = "-n hw.optional.arm64",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                
+                using (Process process = Process.Start(psi))
+                {
+                    if (process != null)
+                    {
+                        string output = process.StandardOutput.ReadToEnd().Trim();
+                        string error = process.StandardError.ReadToEnd().Trim();
+                        process.WaitForExit();
+                        
+                        // 如果hw.optional.arm64返回1，说明是ARM64硬件
+                        if (output == "1")
+                        {
+                            UnityEngine.Debug.Log("Detected native architecture: arm64");
+                            return "arm64";
+                        }
+                        else
+                        {
+                            UnityEngine.Debug.Log("Detected native architecture: x86_64");
+                            return "x86_64";
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogWarning($"Failed to detect native architecture using sysctl: {ex.Message}");
+            }
+            
+            // 备用方法：尝试使用arch命令强制检测
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "arch",
+                    Arguments = "-arm64 uname -m",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                
+                using (Process process = Process.Start(psi))
+                {
+                    if (process != null)
+                    {
+                        string output = process.StandardOutput.ReadToEnd().Trim();
+                        string error = process.StandardError.ReadToEnd().Trim();
+                        process.WaitForExit();
+                        
+                        // 如果能成功运行arch -arm64，说明是ARM64硬件
+                        if (process.ExitCode == 0 && output == "arm64")
+                        {
+                            UnityEngine.Debug.Log("Detected native architecture (fallback): arm64");
+                            return "arm64";
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogWarning($"Failed to detect native architecture using arch: {ex.Message}");
+            }
+            
+            // 如果所有检测都失败，默认使用x86_64（Intel Mac的兼容性）
+            UnityEngine.Debug.LogWarning("Could not detect native architecture, falling back to x86_64");
+            return "x86_64";
+        }
+        
         public async void Start()
         {
             _cancellationTokenSource = new CancellationTokenSource();

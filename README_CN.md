@@ -28,7 +28,7 @@ MCP4Unity是一个Unity编辑器扩展。它允许您将Unity方法作为工具�
 {
   "mcpServers": {
     "mcp4unity": {
-      "command": "[MCPConsole~文件夹路径]/MCPConsole.exe",
+      "command": "[MCPConsole~文件夹路径]/MCPConsole[.exe]",
     },
   }
 }

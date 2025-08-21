@@ -28,7 +28,7 @@ MCP4Unity is a Unity editor extension. It allows you to expose Unity methods as 
 {
   "mcpServers": {
     "mcp4unity": {
-      "command": "[MCPConsole~ folder path]/MCPConsole.exe",
+      "command": "[MCPConsole~ folder path]/MCPConsole[.exe]",
     },
   }
 }
