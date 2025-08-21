@@ -49,8 +49,8 @@ namespace MCP4Unity.Editor
             {
                 Inst.Start();
             }
-        }
-
+        }  
+        [MenuItem("MCP4Unity/Check and Build MCPConsole")]
         public static void CheckAndBuildMCPConsole()
         {
             try
@@ -71,7 +71,7 @@ namespace MCP4Unity.Editor
                 // 检查可执行文件是否存在
                 if (!File.Exists(mcpConsoleExePath))
                 {
-                    UnityEngine.Debug.Log($"MCPConsole.exe not found. Running build script...");
+                    UnityEngine.Debug.Log($"MCPConsole not found. Running build script...");
                     
                     // 检查构建脚本是否存在
                     if (!File.Exists(buildScriptPath))
@@ -96,7 +96,7 @@ namespace MCP4Unity.Editor
                     }
                     else
                     {
-                        // macOS/Linux: 使用bash执行shell脚本
+                        // macOS/Linux: 使用bash执行shell脚本，设置PATH环境变量
                         psi = new ProcessStartInfo
                         {
                             FileName = "/bin/bash",
@@ -107,20 +107,81 @@ namespace MCP4Unity.Editor
                             RedirectStandardOutput = true,
                             RedirectStandardError = true
                         };
+                        
+                        // 确保dotnet能被找到
+                        psi.EnvironmentVariables["PATH"] = "/usr/local/share/dotnet:/usr/local/bin:/opt/dotnet:" + 
+                                                          Environment.GetEnvironmentVariable("PATH");
                     }
                     
                     using (Process process = Process.Start(psi))
                     {
-                        process.WaitForExit();
-                        
-                        // 检查编译结果
-                        if (File.Exists(mcpConsoleExePath))
+                        if (process != null)
                         {
-                            UnityEngine.Debug.Log($"MCPConsole successfully built at: {mcpConsoleExePath}");
+                            if (!Application.platform.Equals(RuntimePlatform.WindowsEditor))
+                            {
+                                // 对于macOS/Linux，读取输出信息
+                                string output = process.StandardOutput.ReadToEnd();
+                                string error = process.StandardError.ReadToEnd();
+                                
+                                process.WaitForExit();
+                                
+                                if (process.ExitCode != 0)
+                                {
+                                    UnityEngine.Debug.LogError($"Build script failed with exit code {process.ExitCode}");
+                                    if (!string.IsNullOrEmpty(output)) UnityEngine.Debug.Log($"Output: {output}");
+                                    if (!string.IsNullOrEmpty(error)) UnityEngine.Debug.LogError($"Error: {error}");
+                                }
+                                else
+                                {
+                                    UnityEngine.Debug.Log($"Build script completed successfully");
+                                    if (!string.IsNullOrEmpty(output)) UnityEngine.Debug.Log($"Output: {output}");
+                                }
+                            }
+                            else
+                            {
+                                process.WaitForExit();
+                            }
+                            
+                            // 检查编译结果
+                            if (File.Exists(mcpConsoleExePath))
+                            {
+                                UnityEngine.Debug.Log($"MCPConsole successfully built at: {mcpConsoleExePath}");
+                            }
+                            else
+                            {
+                                UnityEngine.Debug.LogError($"Failed to build MCPConsole at: {mcpConsoleExePath}");
+                                // 尝试查找可执行文件的实际位置
+                                string[] possiblePaths = {
+                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", MCPConsoleExeName),
+                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "osx-arm64", MCPConsoleExeName),
+                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "osx-x64", MCPConsoleExeName),
+                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "linux-arm64", MCPConsoleExeName),
+                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "linux-x64", MCPConsoleExeName)
+                                };
+                                
+                                foreach (string path in possiblePaths)
+                                {
+                                    if (File.Exists(path))
+                                    {
+                                        UnityEngine.Debug.Log($"Found MCPConsole at: {path}");
+                                        // 尝试复制到预期位置
+                                        try
+                                        {
+                                            File.Copy(path, mcpConsoleExePath, true);
+                                            UnityEngine.Debug.Log($"Copied MCPConsole to expected location: {mcpConsoleExePath}");
+                                        }
+                                        catch (Exception copyEx)
+                                        {
+                                            UnityEngine.Debug.LogError($"Failed to copy MCPConsole: {copyEx.Message}");
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
                         }
                         else
                         {
-                            UnityEngine.Debug.LogError($"Failed to build MCPConsole at: {mcpConsoleExePath}");
+                            UnityEngine.Debug.LogError("Failed to start build process");
                         }
                     }
                 }

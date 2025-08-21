@@ -4,11 +4,25 @@ echo "=================================="
 echo "Building MCPConsole..."
 echo "=================================="
 
-OUTPUT_DIR="../MCPConsole~"
-
-if [ ! -d "$OUTPUT_DIR" ]; then
-    mkdir -p "$OUTPUT_DIR"
+# 设置dotnet路径
+DOTNET_PATH="/usr/local/share/dotnet/dotnet"
+if [ ! -f "$DOTNET_PATH" ]; then
+    # 尝试其他可能的路径
+    if command -v dotnet &> /dev/null; then
+        DOTNET_PATH="dotnet"
+    elif [ -f "/usr/local/bin/dotnet" ]; then
+        DOTNET_PATH="/usr/local/bin/dotnet"
+    elif [ -f "/opt/dotnet/dotnet" ]; then
+        DOTNET_PATH="/opt/dotnet/dotnet"
+    else
+        echo "ERROR: dotnet not found. Please install .NET SDK."
+        exit 1
+    fi
 fi
+
+echo "Using dotnet at: $DOTNET_PATH"
+
+OUTPUT_DIR="."
 
 echo "Deleting old executable files..."
 rm -f "$OUTPUT_DIR/MCPConsole" "$OUTPUT_DIR/MCPConsole.pdb" 2>/dev/null
@@ -31,16 +45,16 @@ fi
 echo "Detected runtime: $RUNTIME"
 
 echo "Cleaning previous builds..."
-dotnet clean -c Release
+"$DOTNET_PATH" clean MCPConsole.sln -c Release
 
 echo "Restoring NuGet packages..."
-dotnet restore
+"$DOTNET_PATH" restore MCPConsole.sln 
 
 echo "Building project..."
-dotnet build -c Release /p:DebugType=None /p:DebugSymbols=false
+"$DOTNET_PATH" build MCPConsole.sln  -c Release /p:DebugType=None /p:DebugSymbols=false
 
 echo "Publishing standalone executable..."
-dotnet publish -c Release -r "$RUNTIME" --self-contained false /p:PublishSingleFile=true /p:PublishReadyToRun=true /p:DebugType=None /p:DebugSymbols=false -o "$OUTPUT_DIR"
+"$DOTNET_PATH" publish MCPConsole.csproj -c Release -r "$RUNTIME" --self-contained false /p:PublishSingleFile=true /p:PublishReadyToRun=true /p:DebugType=None /p:DebugSymbols=false -o "$OUTPUT_DIR"
 
 if [ $? -ne 0 ]; then
     echo "Build failed, please check error messages."
