@@ -54,14 +54,25 @@ namespace MCPConsole
                 }
                 else
                 {
-                    Console.Error.WriteLine($"Error from Unity MCP service: {mcpResponse.Error}");
-                    return null;
+                    // 返回具体的Unity服务错误信息而不是打印到控制台
+                    throw new InvalidOperationException($"Unity MCP service error: {mcpResponse.Error}");
                 }
             }
-            catch (Exception ex)
+            catch (HttpRequestException ex)
             {
-                Console.Error.WriteLine($"Error calling Unity MCP service: {ex.Message}");
-                return null;
+                throw new InvalidOperationException($"HTTP request failed - Unity MCP service may not be running at {_unityMcpUrl}: {ex.Message}", ex);
+            }
+            catch (TaskCanceledException ex)
+            {
+                throw new TimeoutException($"Request to Unity MCP service timed out: {ex.Message}", ex);
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException($"Failed to parse response from Unity MCP service - invalid JSON format: {ex.Message}", ex);
+            }
+            catch (Exception ex) when (!(ex is InvalidOperationException))
+            {
+                throw new InvalidOperationException($"Unexpected error calling Unity MCP service method '{method}': {ex.Message}", ex);
             }
         }
         public class McpResponse
@@ -98,38 +109,79 @@ namespace MCPConsole
                 },
                 CallToolHandler = async (request, cancellationToken) =>
                 {
+                    string toolName = request.Params?.Name ?? "unknown";
+                    
                     try
                     {
-                        Console.WriteLine($"Calling tool: {request.Params.Name}");
+                        Console.WriteLine($"Calling tool: {toolName}");
+
+                        // 验证工具名称
+                        if (string.IsNullOrWhiteSpace(toolName))
+                        {
+                            return new CallToolResponse
+                            {
+                                IsError = true,
+                                Content = [new() { Type = "text", Text = "Tool name is required but was null or empty" }]
+                            };
+                        }
 
                         // 调用Unity中的calltool方法执行工具
                         var parameters = new
                         {
-                            name = request.Params.Name,
-                            arguments = request.Params.Arguments
+                            name = toolName,
+                            arguments = request.Params.Arguments ?? new Dictionary<string, object>()
                         };
 
                         string result = await CallUnityMcpServiceAsync("callTool", parameters);
 
-                        if (result != null)
+                        return new CallToolResponse
                         {
-                            return new CallToolResponse
-                            {
-                                Content = [new() { Type = "text", Text = result }]
-                            };
-                        }
+                            Content = [new() { Type = "text", Text = result }]
+                        };
+                    }
+                    catch (InvalidOperationException ex) when (ex.Message.Contains("Unity MCP service error"))
+                    {
+                        // Unity服务返回的业务逻辑错误
                         return new CallToolResponse
                         {
                             IsError = true,
-                            Content = [new() { Type = "text", Text = $"CallTool {request.Params.Name} failed" }]
+                            Content = [new() { Type = "text", Text = $"Tool '{toolName}' execution failed: {ex.Message}" }]
+                        };
+                    }
+                    catch (InvalidOperationException ex) when (ex.Message.Contains("may not be running"))
+                    {
+                        // Unity服务连接失败
+                        return new CallToolResponse
+                        {
+                            IsError = true,
+                            Content = [new() { Type = "text", Text = $"Cannot connect to Unity MCP service. Please ensure Unity is running and MCP service is started. Details: {ex.Message}" }]
+                        };
+                    }
+                    catch (TimeoutException ex)
+                    {
+                        // 请求超时
+                        return new CallToolResponse
+                        {
+                            IsError = true,
+                            Content = [new() { Type = "text", Text = $"Tool '{toolName}' execution timed out. The operation may be too complex or Unity may be unresponsive: {ex.Message}" }]
+                        };
+                    }
+                    catch (InvalidOperationException ex) when (ex.Message.Contains("invalid JSON"))
+                    {
+                        // JSON解析错误
+                        return new CallToolResponse
+                        {
+                            IsError = true,
+                            Content = [new() { Type = "text", Text = $"Unity MCP service returned invalid response format for tool '{toolName}': {ex.Message}" }]
                         };
                     }
                     catch (Exception ex)
                     {
+                        // 其他未预期的异常
                         return new CallToolResponse
                         {
                             IsError = true,
-                            Content = [new() { Type = "text", Text = $"CallTool {request.Params.Name} error: {ex.Message}" }]
+                            Content = [new() { Type = "text", Text = $"Unexpected error executing tool '{toolName}': {ex.GetType().Name} - {ex.Message}" }]
                         };
                     }
                 },
