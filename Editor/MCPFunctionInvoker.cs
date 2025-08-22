@@ -53,8 +53,19 @@ namespace MCP4Unity.Editor
                     {
                         Type type = properties[i].Type;
                         JToken jToken = parameters.GetValue(properties[i].Name);
-                        object value = jToken?.ToObject(type);
-                        objects[i] = jToken?.ToObject(type);
+                        
+                        // 容错处理：当参数名是json且需求string时，如果传入的是对象则转换为字符串
+                        if (type == typeof(string) && 
+                            properties[i].Name.Equals("json", StringComparison.OrdinalIgnoreCase) && 
+                            jToken != null && 
+                            (jToken.Type == JTokenType.Object || jToken.Type == JTokenType.Array))
+                        {
+                            objects[i] = jToken.ToString();
+                        }
+                        else
+                        {
+                            objects[i] = jToken?.ToObject(type);
+                        }
                     }
                     return tool.MethodInfo.Invoke(null, objects);
                 }

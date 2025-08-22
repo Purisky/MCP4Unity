@@ -1000,7 +1000,37 @@ namespace MCP4Unity.Editor
             
             var paramField = new TextField();
             paramField.style.flexGrow = 1;
-            paramField.style.height = 25;
+            
+            // For string type parameters, enable multiline and auto-resize
+            if (property.type == "string")
+            {
+                paramField.multiline = true;
+                paramField.style.minHeight = 25;
+                paramField.style.height = 25; // Start with single line height
+                paramField.style.whiteSpace = WhiteSpace.Normal;
+                
+                // Register callback to auto-resize based on content
+                paramField.RegisterValueChangedCallback(evt =>
+                {
+                    var text = evt.newValue ?? "";
+                    var lineCount = string.IsNullOrEmpty(text) ? 1 : text.Split('\n').Length;
+                    var newHeight = Mathf.Max(25, lineCount * 18 + 7); // 18px per line + padding
+                    paramField.style.height = newHeight;
+                });
+                
+                // Also set initial height based on existing value
+                paramField.RegisterCallback<AttachToPanelEvent>(evt =>
+                {
+                    var text = paramField.value ?? "";
+                    var lineCount = string.IsNullOrEmpty(text) ? 1 : text.Split('\n').Length;
+                    var newHeight = Mathf.Max(25, lineCount * 18 + 7);
+                    paramField.style.height = newHeight;
+                });
+            }
+            else
+            {
+                paramField.style.height = 25;
+            }
             
             // Set tooltip
             string tooltip = $"Type: {property.type}";
@@ -1017,7 +1047,9 @@ namespace MCP4Unity.Editor
                     text = "▼"
                 };
                 dropdownButton.style.width = 30;
-                dropdownButton.style.height = 25;
+                // Match the initial height of the text field
+                dropdownButton.style.height = property.type == "string" ? 25 : 25;
+                dropdownButton.style.alignSelf = Align.FlexStart; // Align to top for multiline fields
                 dropdownButton.style.marginLeft = 5;
                 dropdownButton.style.fontSize = 12;
                 dropdownButton.style.backgroundColor = new Color(0.4f, 0.4f, 0.4f);
@@ -1200,6 +1232,10 @@ namespace MCP4Unity.Editor
             }
             catch (System.Exception ex)
             {
+                if (ex is TargetInvocationException tex)
+                {
+                    ex = tex.InnerException ?? ex;
+                }
                 string errorText = $"{ex}"; // 移除 "✗ Error:" 前缀
                 SetResultContent(errorText, new Color(0.8f, 0.2f, 0.2f), true);
                 UpdateResultHeaderStatus(false); // 更新header状态显示
@@ -1214,7 +1250,7 @@ namespace MCP4Unity.Editor
                 
                 isViewingHistory = false; // Reset viewing history flag
                 
-                Debug.LogError($"Error executing MCP Tool '{currentSelectedTool.name}': {ex}");
+                Debug.LogError($"Error executing MCP Tool '{currentSelectedTool.name}':\n{ex}");
             }
         }
         

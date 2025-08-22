@@ -1,6 +1,8 @@
-﻿using ModelContextProtocol.Protocol.Transport;
+﻿#nullable enable
+using ModelContextProtocol.Protocol.Transport;
 using ModelContextProtocol.Protocol.Types;
 using ModelContextProtocol.Server;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -32,54 +34,34 @@ namespace MCPConsole
         private static readonly string _unityMcpUrl = "http://localhost:8080/mcp/";
         static async Task<string> CallUnityMcpServiceAsync(string method, object parameters)
         {
-            try
+            var request = new
             {
-                var request = new
-                {
-                    method = method,
-                    @params = parameters != null ? JsonSerializer.Serialize(parameters) : null
-                };
+                method = method,
+                @params = parameters != null ? JsonSerializer.Serialize(parameters) : null
+            };
 
-                var content = new StringContent(JsonSerializer.Serialize(request), Encoding.UTF8, "application/json");
-                HttpResponseMessage response = await _httpClient.PostAsync(_unityMcpUrl, content);
+            var content = new StringContent(JsonSerializer.Serialize(request), Encoding.UTF8, "application/json");
+            HttpResponseMessage response = await _httpClient.PostAsync(_unityMcpUrl, content);
 
-                response.EnsureSuccessStatusCode();
+            response.EnsureSuccessStatusCode();
 
-                string responseBody = await response.Content.ReadAsStringAsync();
-                var mcpResponse = JsonSerializer.Deserialize<McpResponse>(responseBody, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-
-                if (mcpResponse.Success)
-                {
-                    return mcpResponse.Result.ToString();
-                }
-                else
-                {
-                    // 返回具体的Unity服务错误信息而不是打印到控制台
-                    throw new Exception($"{mcpResponse.Error}");
-                }
-            }
-            catch (HttpRequestException ex)
+            string responseBody = await response.Content.ReadAsStringAsync();
+            var mcpResponse = JsonSerializer.Deserialize<McpResponse>(responseBody, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? throw new JsonException($"Failed to deserialize MCP response:{responseBody}");
+            if (mcpResponse.Success)
             {
-                throw new InvalidOperationException($"HTTP request failed - Unity MCP service may not be running at {_unityMcpUrl}: {ex.Message}", ex);
+                return mcpResponse.Result.ToString();
             }
-            catch (TaskCanceledException ex)
+            else
             {
-                throw new TimeoutException($"Request to Unity MCP service timed out: {ex.Message}", ex);
-            }
-            catch (JsonException ex)
-            {
-                throw new InvalidOperationException($"Failed to parse response from Unity MCP service - invalid JSON format: {ex.Message}", ex);
-            }
-            catch (Exception ex) when (!(ex is InvalidOperationException))
-            {
-                throw new InvalidOperationException($"Unexpected error calling Unity MCP service method '{method}': {ex.Message}", ex);
+                // 返回具体的Unity服务错误信息而不是打印到控制台
+                throw new Exception($"{mcpResponse.Error}");
             }
         }
         public class McpResponse
         {
             public bool Success { get; set; }
             public JsonElement Result { get; set; }
-            public string Error { get; set; }
+            public string? Error { get; set; }
         }
         #endregion
 
@@ -92,10 +74,10 @@ namespace MCPConsole
                 {
                     try
                     {
-                        string result = await CallUnityMcpServiceAsync("listtools", null);
+                        string result = await CallUnityMcpServiceAsync("listtools", null!);
                         if (result != null)
                         {
-                            return JsonSerializer.Deserialize<ListToolsResult>(result);
+                            return JsonSerializer.Deserialize<ListToolsResult>(result)??new();
                         }
                     }
                     catch (Exception ex)
@@ -129,7 +111,7 @@ namespace MCPConsole
                         var parameters = new
                         {
                             name = toolName,
-                            arguments = request.Params.Arguments?? new Dictionary<string, JsonElement>()
+                            arguments = request.Params?.Arguments?? new Dictionary<string, JsonElement>()
                         };
                         string result = await CallUnityMcpServiceAsync("callTool", parameters);
 
@@ -140,6 +122,10 @@ namespace MCPConsole
                     }
                     catch (Exception ex)
                     {
+                        if (ex is TargetInvocationException tex)
+                        {
+                            ex = tex.InnerException ?? tex;
+                        }
                         // Unity服务返回的业务逻辑错误
                         return new CallToolResponse
                         {
