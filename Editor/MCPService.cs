@@ -386,10 +386,13 @@ namespace MCP4Unity.Editor
                         }
                         catch (Exception invokeEx)
                         {
-                            // 记录失败的工具调用历史
-                            AddMCPExecutionHistory(toolArgs.name, parameters, invokeEx.Message, false);
+                            // 获取完整的异常信息（包括堆栈跟踪）
+                            string fullErrorMessage = invokeEx.ToString();
                             
-                            return MCPResponse.Error(invokeEx);
+                            // 记录失败的工具调用历史
+                            AddMCPExecutionHistory(toolArgs.name, parameters, fullErrorMessage, false);
+                            
+                            return MCPResponse.Error(fullErrorMessage);
                         }
                 }
                 return MCPResponse.Error($"unknown method:{request.method}") ;
@@ -497,12 +500,13 @@ namespace MCP4Unity.Editor
 
         public static MCPResponse Error(string error)
         {
+            Debug.Log(error);
             return new MCPResponse
             {
                 success = false,
                 error = error
             };
         }
-        public static MCPResponse Error(Exception ex) => Error(ex.Message);
+        public static MCPResponse Error(Exception ex) => Error(ex.ToString());
     }
 }

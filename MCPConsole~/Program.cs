@@ -55,7 +55,7 @@ namespace MCPConsole
                 else
                 {
                     // 返回具体的Unity服务错误信息而不是打印到控制台
-                    throw new InvalidOperationException($"Unity MCP service error: {mcpResponse.Error}");
+                    throw new Exception($"{mcpResponse.Error}");
                 }
             }
             catch (HttpRequestException ex)
@@ -138,49 +138,13 @@ namespace MCPConsole
                             Content = [new() { Type = "text", Text = result }]
                         };
                     }
-                    catch (InvalidOperationException ex) when (ex.Message.Contains("Unity MCP service error"))
+                    catch (Exception ex)
                     {
                         // Unity服务返回的业务逻辑错误
                         return new CallToolResponse
                         {
                             IsError = true,
-                            Content = [new() { Type = "text", Text = $"Tool '{toolName}' execution failed: {ex.Message}" }]
-                        };
-                    }
-                    catch (InvalidOperationException ex) when (ex.Message.Contains("may not be running"))
-                    {
-                        // Unity服务连接失败
-                        return new CallToolResponse
-                        {
-                            IsError = true,
-                            Content = [new() { Type = "text", Text = $"Cannot connect to Unity MCP service. Please ensure Unity is running and MCP service is started. Details: {ex.Message}" }]
-                        };
-                    }
-                    catch (TimeoutException ex)
-                    {
-                        // 请求超时
-                        return new CallToolResponse
-                        {
-                            IsError = true,
-                            Content = [new() { Type = "text", Text = $"Tool '{toolName}' execution timed out. The operation may be too complex or Unity may be unresponsive: {ex.Message}" }]
-                        };
-                    }
-                    catch (InvalidOperationException ex) when (ex.Message.Contains("invalid JSON"))
-                    {
-                        // JSON解析错误
-                        return new CallToolResponse
-                        {
-                            IsError = true,
-                            Content = [new() { Type = "text", Text = $"Unity MCP service returned invalid response format for tool '{toolName}': {ex.Message}" }]
-                        };
-                    }
-                    catch (Exception ex)
-                    {
-                        // 其他未预期的异常
-                        return new CallToolResponse
-                        {
-                            IsError = true,
-                            Content = [new() { Type = "text", Text = $"Unexpected error executing tool '{toolName}': {ex.GetType().Name} - {ex.Message}" }]
+                            Content = [new() { Type = "text", Text = $"Tool '{toolName}' execution failed: {ex}" }]
                         };
                     }
                 },
