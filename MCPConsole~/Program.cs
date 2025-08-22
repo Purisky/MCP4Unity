@@ -129,9 +129,8 @@ namespace MCPConsole
                         var parameters = new
                         {
                             name = toolName,
-                            arguments = request.Params.Arguments ?? new Dictionary<string, object>()
+                            arguments = request.Params.Arguments?? new Dictionary<string, JsonElement>()
                         };
-
                         string result = await CallUnityMcpServiceAsync("callTool", parameters);
 
                         return new CallToolResponse
