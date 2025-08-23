@@ -37,6 +37,26 @@ namespace MCP4Unity.Editor
         /// </summary>
         public ParamDropdownAttribute GetDropdownAttribute() => ParameterInfo?.GetCustomAttribute<ParamDropdownAttribute>();
         
+        /// <summary>
+        /// Check if the parameter type is a primitive/basic type
+        /// </summary>
+        public bool IsPrimitiveType() => IsPrimitiveType(Type);
+        
+        /// <summary>
+        /// Check if the given type is a primitive/basic type
+        /// </summary>
+        public static bool IsPrimitiveType(Type type)
+        {
+            return type == typeof(string) ||
+                   type == typeof(int) ||
+                   type == typeof(float) ||
+                   type == typeof(double) ||
+                   type == typeof(decimal) ||
+                   type == typeof(bool) ||
+                   type == typeof(DateTime) ||
+                   type.IsPrimitive;
+        }
+        
         public static string SharpTypeToTypeScriptType(Type type)
         {
             if (type == typeof(int))

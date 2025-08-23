@@ -999,31 +999,40 @@ namespace MCP4Unity.Editor
             var paramField = new TextField();
             paramField.style.flexGrow = 1;
             
-            // For string type parameters, enable multiline and auto-resize
-            if (property.type == "string")
+            // Check if it's a complex (non-primitive) type that should use JSON
+            bool isComplexType = !property.IsPrimitiveType() && property.type == "object";
+            bool isMultilineType = property.type == "string" || isComplexType;
+            
+            // For string type parameters and complex types, enable multiline and auto-resize
+            if (isMultilineType)
             {
                 paramField.multiline = true;
-                paramField.style.minHeight = 25;
-                paramField.style.height = 25; // Start with single line height
+                paramField.style.minHeight = isComplexType ? 60 : 25;
+                paramField.style.height = StyleKeyword.Auto; // Let UI Toolkit handle height automatically
                 paramField.style.whiteSpace = WhiteSpace.Normal;
                 
-                // Register callback to auto-resize based on content
-                paramField.RegisterValueChangedCallback(evt =>
+                // Set placeholder for complex types
+                if (isComplexType)
                 {
-                    var text = evt.newValue ?? "";
-                    var lineCount = string.IsNullOrEmpty(text) ? 1 : text.Split('\n').Length;
-                    var newHeight = Mathf.Max(25, lineCount * 18 + 7); // 18px per line + padding
-                    paramField.style.height = newHeight;
-                });
-                
-                // Also set initial height based on existing value
-                paramField.RegisterCallback<AttachToPanelEvent>(evt =>
-                {
-                    var text = paramField.value ?? "";
-                    var lineCount = string.IsNullOrEmpty(text) ? 1 : text.Split('\n').Length;
-                    var newHeight = Mathf.Max(25, lineCount * 18 + 7);
-                    paramField.style.height = newHeight;
-                });
+                    try 
+                    {
+                        // Try to create a default instance and show its JSON representation
+                        if (property.Type != typeof(object) && !property.Type.IsAbstract && !property.Type.IsInterface)
+                        {
+                            var defaultInstance = Activator.CreateInstance(property.Type);
+                            var jsonString = Newtonsoft.Json.JsonConvert.SerializeObject(defaultInstance, Newtonsoft.Json.Formatting.Indented);
+                            paramField.value = jsonString;
+                        }
+                        else
+                        {
+                            paramField.value = "{\n  \"example\": \"value\"\n}";
+                        }
+                    }
+                    catch
+                    {
+                        paramField.value = "{\n  \"example\": \"value\"\n}";
+                    }
+                }
             }
             else
             {
@@ -1032,6 +1041,10 @@ namespace MCP4Unity.Editor
             
             // Set tooltip
             string tooltip = $"Type: {property.type}";
+            if (isComplexType)
+            {
+                tooltip += " (JSON format)";
+            }
             if (!string.IsNullOrEmpty(property.description))
             {
                 tooltip += $"\nDescription: {property.description}";
@@ -1045,9 +1058,8 @@ namespace MCP4Unity.Editor
                     text = "▼"
                 };
                 dropdownButton.style.width = 30;
-                // Match the initial height of the text field
-                dropdownButton.style.height = property.type == "string" ? 25 : 25;
-                dropdownButton.style.alignSelf = Align.FlexStart; // Align to top for multiline fields
+                dropdownButton.style.height = 25; // Fixed height for dropdown button
+                dropdownButton.style.alignSelf = Align.FlexStart; // Always align to top
                 dropdownButton.style.marginLeft = 5;
                 dropdownButton.style.fontSize = 12;
                 dropdownButton.style.backgroundColor = new Color(0.4f, 0.4f, 0.4f);
@@ -1171,37 +1183,69 @@ namespace MCP4Unity.Editor
                         try
                         {
                             object convertedValue;
-                            if (property.Type == typeof(string))
+                            
+                            // Check if it's a primitive type
+                            if (property.IsPrimitiveType())
                             {
-                                convertedValue = value;
-                            }
-                            else if (property.Type == typeof(int))
-                            {
-                                convertedValue = int.Parse(value);
-                            }
-                            else if (property.Type == typeof(float))
-                            {
-                                convertedValue = float.Parse(value);
-                            }
-                            else if (property.Type == typeof(double))
-                            {
-                                convertedValue = double.Parse(value);
-                            }
-                            else if (property.Type == typeof(bool))
-                            {
-                                convertedValue = bool.Parse(value);
+                                // Handle primitive types
+                                if (property.Type == typeof(string))
+                                {
+                                    convertedValue = value;
+                                }
+                                else if (property.Type == typeof(int))
+                                {
+                                    convertedValue = int.Parse(value);
+                                }
+                                else if (property.Type == typeof(float))
+                                {
+                                    convertedValue = float.Parse(value);
+                                }
+                                else if (property.Type == typeof(double))
+                                {
+                                    convertedValue = double.Parse(value);
+                                }
+                                else if (property.Type == typeof(bool))
+                                {
+                                    convertedValue = bool.Parse(value);
+                                }
+                                else if (property.Type == typeof(DateTime))
+                                {
+                                    convertedValue = DateTime.Parse(value);
+                                }
+                                else
+                                {
+                                    convertedValue = value;
+                                }
                             }
                             else
                             {
-                                convertedValue = value;
+                                // Handle complex types - parse as JSON
+                                try
+                                {
+                                    convertedValue = Newtonsoft.Json.JsonConvert.DeserializeObject(value, property.Type);
+                                }
+                                catch (Newtonsoft.Json.JsonException)
+                                {
+                                    // If JSON parsing fails, try to create a JObject/JToken
+                                    var jsonToken = JToken.Parse(value);
+                                    convertedValue = jsonToken.ToObject(property.Type);
+                                }
                             }
                             
                             parameters[field.Key] = JToken.FromObject(convertedValue);
                         }
-                        catch
+                        catch (Exception ex)
                         {
-                            // If parsing fails, use as string
-                            parameters[field.Key] = value;
+                            // If all parsing fails, try using the raw string
+                            try
+                            {
+                                parameters[field.Key] = value;
+                            }
+                            catch
+                            {
+                                Debug.LogWarning($"Failed to parse parameter '{field.Key}' with value: {value}. Error: {ex.Message}");
+                                throw new ArgumentException($"Invalid value for parameter '{field.Key}': {value}", ex);
+                            }
                         }
                     }
                 }
