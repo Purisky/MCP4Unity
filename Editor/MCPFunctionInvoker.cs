@@ -71,6 +71,7 @@ namespace MCP4Unity.Editor
                 }
                 catch (Exception e)
                 {
+                    if (e is TargetInvocationException te) { e = te.InnerException??e; }
                     throw e;
                 }
             }
