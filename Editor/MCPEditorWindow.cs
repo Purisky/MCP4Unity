@@ -92,7 +92,6 @@ namespace MCP4Unity.Editor
         List<MCPTool> availableTools = new List<MCPTool>();
         List<Button> toolButtons = new List<Button>();
         Button executeButton;
-        bool isViewingHistory = false;
         
         // History UI fields
         TextField historySearchField;
@@ -717,7 +716,6 @@ namespace MCP4Unity.Editor
             currentSelectedTool = tool;
             toolDetailsContainer.Clear();
             currentToolParameterFields.Clear();
-            isViewingHistory = false; // Reset viewing history flag when selecting a tool normally
             
             // Update button selection visual state
             UpdateToolButtonSelection(tool);
@@ -1226,7 +1224,6 @@ namespace MCP4Unity.Editor
                 }
                 AddToHistory(currentSelectedTool.name, parameterDict, successText, true);
                 
-                isViewingHistory = false; // Reset viewing history flag
                 
                 Debug.Log($"MCP Tool '{currentSelectedTool.name}' executed successfully. Result: {result}");
             }
@@ -1248,7 +1245,6 @@ namespace MCP4Unity.Editor
                 }
                 AddToHistory(currentSelectedTool.name, parameterDict, errorText, false);
                 
-                isViewingHistory = false; // Reset viewing history flag
                 
                 Debug.LogError($"Error executing MCP Tool '{currentSelectedTool.name}':\n{ex}");
             }
@@ -1728,7 +1724,6 @@ namespace MCP4Unity.Editor
         
         void LoadHistoryItem(ToolExecutionHistory history, int index)
         {
-            isViewingHistory = true;
             
             // Only update selection if it changed
             if (selectedHistoryIndex != index)
