@@ -1745,7 +1745,8 @@ namespace MCP4Unity.Editor
         void ShowHistoryContextMenu(ToolExecutionHistory history, int index)
         {
             var menu = new GenericMenu();
-            menu.AddItem(new GUIContent("Delete"), false, () => DeleteHistoryItem(index));
+            menu.AddItem(new GUIContent("删除"), false, () => DeleteHistoryItem(index));
+            menu.AddItem(new GUIContent("删除此条及之前的所有记录"), false, () => DeleteHistoryItemAndBefore(index));
             menu.ShowAsContext();
         }
         
@@ -1762,6 +1763,25 @@ namespace MCP4Unity.Editor
                 {
                     selectedHistoryIndex--;
                 }
+                FilterAndRefreshHistory();
+            }
+        }
+        
+        void DeleteHistoryItemAndBefore(int index)
+        {
+            if (index >= 0 && index < MCPService.MCPExecutionHistory.Count)
+            {
+                // 删除从0到index的所有记录（包含index）
+                // 因为历史记录已按时间排序，直接根据索引删除即可
+                for (int i = index; i >= 0; i--)
+                {
+                    MCPService.MCPExecutionHistory.RemoveAt(i);
+                }
+                
+                // 重置选中索引
+                selectedHistoryIndex = -1;
+                
+                // 刷新显示
                 FilterAndRefreshHistory();
             }
         }
