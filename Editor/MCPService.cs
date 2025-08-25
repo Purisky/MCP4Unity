@@ -470,6 +470,14 @@ namespace MCP4Unity.Editor
                 Debug.LogWarning($"Failed to save MCP execution history: {ex.Message}");
             }
         }
+        
+        /// <summary>
+        /// 公开的保存执行历史记录方法
+        /// </summary>
+        public static void SaveExecutionHistoryToPrefs()
+        {
+            SaveExecutionHistory();
+        }
     }
     public class MCPRequest
     {

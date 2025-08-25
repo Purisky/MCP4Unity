@@ -1535,6 +1535,10 @@ namespace MCP4Unity.Editor
         {
             MCPService.MCPExecutionHistory.Clear();
             selectedHistoryIndex = -1;
+            
+            // 保存历史记录更改
+            MCPService.SaveExecutionHistoryToPrefs();
+            
             FilterAndRefreshHistory();
             
             // 更新展开按钮中的数量显示
@@ -1763,6 +1767,10 @@ namespace MCP4Unity.Editor
                 {
                     selectedHistoryIndex--;
                 }
+                
+                // 保存历史记录更改
+                MCPService.SaveExecutionHistoryToPrefs();
+                
                 FilterAndRefreshHistory();
             }
         }
@@ -1780,6 +1788,9 @@ namespace MCP4Unity.Editor
                 
                 // 重置选中索引
                 selectedHistoryIndex = -1;
+                
+                // 保存历史记录更改
+                MCPService.SaveExecutionHistoryToPrefs();
                 
                 // 刷新显示
                 FilterAndRefreshHistory();
