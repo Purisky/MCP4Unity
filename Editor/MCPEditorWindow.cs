@@ -1382,6 +1382,7 @@ namespace MCP4Unity.Editor
                     
                     SetResultContent(successText, new Color(0.2f, 0.8f, 0.2f), false);
                     UpdateResultHeaderStatus(true);
+                    lastExecutionSuccess = true; // 保存成功状态用于序列化
                 }
                 
                 // Add to history
@@ -1404,6 +1405,7 @@ namespace MCP4Unity.Editor
                 {
                     SetResultContent(errorText, new Color(0.8f, 0.2f, 0.2f), true);
                     UpdateResultHeaderStatus(false);
+                    lastExecutionSuccess = false; // 保存失败状态用于序列化
                 }
                 
                 // Add error to history
@@ -1892,7 +1894,8 @@ namespace MCP4Unity.Editor
         {
             var menu = new GenericMenu();
             menu.AddItem(new GUIContent("删除"), false, () => DeleteHistoryItem(index));
-            menu.AddItem(new GUIContent("删除此条及之前的所有记录"), false, () => DeleteHistoryItemAndBefore(index));
+            menu.AddItem(new GUIContent("删除此条及之前的所有记录⬇️"), false, () => DeleteHistoryItemAndBefore(index));
+            menu.AddItem(new GUIContent("删除此条及之后的所有记录⬆️"), false, () => DeleteHistoryItemAndAfter(index));
             menu.ShowAsContext();
         }
         
@@ -1924,6 +1927,28 @@ namespace MCP4Unity.Editor
                 // 删除从0到index的所有记录（包含index）
                 // 因为历史记录已按时间排序，直接根据索引删除即可
                 for (int i = index; i >= 0; i--)
+                {
+                    MCPService.MCPExecutionHistory.RemoveAt(i);
+                }
+                
+                // 重置选中索引
+                selectedHistoryIndex = -1;
+                
+                // 保存历史记录更改
+                MCPService.SaveExecutionHistoryToPrefs();
+                
+                // 刷新显示
+                FilterAndRefreshHistory();
+            }
+        }
+        
+        void DeleteHistoryItemAndAfter(int index)
+        {
+            if (index >= 0 && index < MCPService.MCPExecutionHistory.Count)
+            {
+                // 删除从index到最后的所有记录（包含index）
+                // 因为历史记录已按时间排序，从后往前删除以避免索引变化
+                for (int i = MCPService.MCPExecutionHistory.Count - 1; i >= index; i--)
                 {
                     MCPService.MCPExecutionHistory.RemoveAt(i);
                 }
@@ -2182,6 +2207,7 @@ namespace MCP4Unity.Editor
                 
                 SetResultContent(history.executionResult, textColor, isError);
                 UpdateResultHeaderStatus(history.executionSuccess); // 更新结果头部状态
+                lastExecutionSuccess = history.executionSuccess; // 同步执行状态用于序列化
             }
             
             // Hide execute button if tool doesn't exist or parameters don't match
