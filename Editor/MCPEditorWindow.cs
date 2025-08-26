@@ -446,12 +446,21 @@ namespace MCP4Unity.Editor
         
         public void UpdateStartBtn()
         {
-            startBtn.text = MCPService.Inst.Running ? "Stop" : "Start";
+            if (startBtn != null)
+            {
+                startBtn.text = MCPService.Inst.Running ? "Stop" : "Start";
+            }
             titleContent.text = "MCP:" + (MCPService.Inst.Running ? "Running" : "Stopped");
         }
         
         void RefreshTools()
         {
+            // Check if GUI has been created
+            if (toolListContainer == null || toolDetailsContainer == null)
+            {
+                return;
+            }
+            
             // Clear existing content
             toolListContainer.Clear();
             toolDetailsContainer.Clear();
@@ -1377,7 +1386,11 @@ namespace MCP4Unity.Editor
                 {
                     if (this != null)
                     {
-                        UpdateHistoryCollapseState();
+                        // 只有在 GUI 已经创建的情况下才更新状态
+                        if (rootVisualElement != null && rootVisualElement.childCount > 0)
+                        {
+                            UpdateHistoryCollapseState();
+                        }
                     }
                 };
             }
