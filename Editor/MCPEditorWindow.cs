@@ -2,6 +2,7 @@
 using UnityEngine.UIElements;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 using System.Reflection;
@@ -92,6 +93,10 @@ namespace MCP4Unity.Editor
         List<MCPTool> availableTools = new List<MCPTool>();
         List<Button> toolButtons = new List<Button>();
         Button executeButton;
+        
+        // Animation state management (local UI state only)
+        private IVisualElementScheduledItem animationScheduler;
+        private int animationFrame = 0;
         
         // History UI fields
         TextField historySearchField;
@@ -419,6 +424,7 @@ namespace MCP4Unity.Editor
             
             MCPService.OnStateChange += UpdateStartBtn;
             MCPService.OnStateChange += RefreshTools;
+            MCPService.OnToolExecutionStateChanged += OnToolExecutionStateChanged;
             UpdateStartBtn();
             RefreshTools();
             RefreshHistory();
@@ -442,6 +448,26 @@ namespace MCP4Unity.Editor
         void OnToggle(ChangeEvent<bool> evt)
         {
             EditorPrefs.SetBool("MCP4Unity_Auto_Start", evt.newValue);
+        }
+        
+        /// <summary>
+        /// 处理工具执行状态变化
+        /// </summary>
+        void OnToolExecutionStateChanged(bool isExecuting, string toolName)
+        {
+            if (executeButton != null)
+            {
+                executeButton.SetEnabled(!isExecuting);
+                
+                if (isExecuting)
+                {
+                    StartExecutionAnimation();
+                }
+                else
+                {
+                    StopExecutionAnimation();
+                }
+            }
         }
         
         public void UpdateStartBtn()
@@ -581,13 +607,44 @@ namespace MCP4Unity.Editor
             toolContent.style.flexGrow = 1;
             toolContent.style.width = new Length(100, LengthUnit.Percent);
             
+            // Tool name with async indicator
+            var toolNameContainer = new VisualElement();
+            toolNameContainer.style.flexDirection = FlexDirection.Row;
+            toolNameContainer.style.alignItems = Align.Center;
+            toolNameContainer.style.marginBottom = 4;
+            
             var toolName = new Label($"{tool.MethodInfo.Name}");
             toolName.style.fontSize = 12;
             toolName.style.unityFontStyleAndWeight = FontStyle.Bold;
             toolName.style.color = new Color(0.9f, 0.9f, 0.9f);
-            toolName.style.marginBottom = 4;
             toolName.style.whiteSpace = WhiteSpace.Normal; // Allow text wrapping
-            toolContent.Add(toolName);
+            toolNameContainer.Add(toolName);
+            
+            // Add async indicator if method returns Task or Task<T>
+            var returnType = tool.MethodInfo.ReturnType;
+            bool isAsync = returnType == typeof(Task) || 
+                          (returnType.IsGenericType && returnType.GetGenericTypeDefinition() == typeof(Task<>));
+            
+            if (isAsync)
+            {
+                var asyncBadge = new Label("async");
+                asyncBadge.style.fontSize = 9;
+                asyncBadge.style.color = new Color(0.9f, 0.7f, 0.2f);
+                asyncBadge.style.backgroundColor = new Color(0.3f, 0.2f, 0.1f, 0.8f);
+                asyncBadge.style.paddingLeft = 4;
+                asyncBadge.style.paddingRight = 4;
+                asyncBadge.style.paddingTop = 1;
+                asyncBadge.style.paddingBottom = 1;
+                asyncBadge.style.marginLeft = 6;
+                asyncBadge.style.borderTopLeftRadius = 3;
+                asyncBadge.style.borderTopRightRadius = 3;
+                asyncBadge.style.borderBottomLeftRadius = 3;
+                asyncBadge.style.borderBottomRightRadius = 3;
+                asyncBadge.style.unityFontStyleAndWeight = FontStyle.Bold;
+                toolNameContainer.Add(asyncBadge);
+            }
+            
+            toolContent.Add(toolNameContainer);
             
             // Tool description (show complete description)
             if (!string.IsNullOrEmpty(tool.description))
@@ -606,6 +663,10 @@ namespace MCP4Unity.Editor
             
             // Set tooltip with enhanced information
             string tooltip = $"{tool.name}";
+            if (isAsync)
+            {
+                tooltip += " (Async)";
+            }
             if (!string.IsNullOrEmpty(tool.description))
             {
                 tooltip += $"\n{tool.description}";
@@ -791,6 +852,30 @@ namespace MCP4Unity.Editor
             nameLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
             nameLabel.style.color = new Color(0.2f, 0.6f, 1f);
             titleContainer.Add(nameLabel);
+            
+            // Add async indicator if method returns Task or Task<T>
+            var returnType = tool.MethodInfo.ReturnType;
+            bool isAsync = returnType == typeof(Task) || 
+                          (returnType.IsGenericType && returnType.GetGenericTypeDefinition() == typeof(Task<>));
+            
+            if (isAsync)
+            {
+                var asyncBadge = new Label("ASYNC");
+                asyncBadge.style.fontSize = 11;
+                asyncBadge.style.color = new Color(0.9f, 0.7f, 0.2f);
+                asyncBadge.style.backgroundColor = new Color(0.3f, 0.2f, 0.1f, 0.8f);
+                asyncBadge.style.paddingLeft = 6;
+                asyncBadge.style.paddingRight = 6;
+                asyncBadge.style.paddingTop = 2;
+                asyncBadge.style.paddingBottom = 2;
+                asyncBadge.style.marginLeft = 10;
+                asyncBadge.style.borderTopLeftRadius = 4;
+                asyncBadge.style.borderTopRightRadius = 4;
+                asyncBadge.style.borderBottomLeftRadius = 4;
+                asyncBadge.style.borderBottomRightRadius = 4;
+                asyncBadge.style.unityFontStyleAndWeight = FontStyle.Bold;
+                titleContainer.Add(asyncBadge);
+            }
             
             var categoryBadge = new Label($"[{GetToolCategory(tool)}]");
             categoryBadge.style.fontSize = 12;
@@ -1167,9 +1252,9 @@ namespace MCP4Unity.Editor
             menu.ShowAsContext();
         }
         
-        void ExecuteCurrentTool()
+        async void ExecuteCurrentTool()
         {
-            if (currentSelectedTool == null || currentToolResultLabel == null)
+            if (currentSelectedTool == null || currentToolResultLabel == null || MCPService.IsToolExecuting)
             {
                 return;
             }
@@ -1178,6 +1263,11 @@ namespace MCP4Unity.Editor
             {
                 // Clear previous result
                 SetResultContent("Executing...", new Color(0.8f, 0.8f, 0.2f), false);
+                
+                // Set executing state in MCPService
+                var cancellationTokenSource = new System.Threading.CancellationTokenSource();
+                MCPService.SetToolExecutionState(true, currentSelectedTool.name, cancellationTokenSource.Token);
+                var cancellationToken = MCPService.GetCurrentExecutionCancellationToken();
                 
                 // Build parameters JObject
                 var parameters = new JObject();
@@ -1259,26 +1349,45 @@ namespace MCP4Unity.Editor
                     }
                 }
                 
-                // Call the tool
-                var result = MCPFunctionInvoker.Invoke(currentSelectedTool.name, parameters);
-                
-                // Display result
-                string resultText = result?.ToString() ?? "null";
-                string successText = $"{resultText}"; // 移除 "✓ Success: " 前缀
-                
-                SetResultContent(successText, new Color(0.2f, 0.8f, 0.2f), false);
-                UpdateResultHeaderStatus(true); // 更新header状态显示
-                
-                // Add to history
+                // Store tool info for callback (in case window is closed)
+                var toolName = currentSelectedTool.name;
                 var parameterDict = new Dictionary<string, string>();
                 foreach (var field in currentToolParameterFields)
                 {
                     parameterDict[field.Key] = field.Value.value ?? "";
                 }
-                AddToHistory(currentSelectedTool.name, parameterDict, successText, true);
                 
+                // Check if execution was cancelled before starting
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    Debug.Log($"MCP Tool '{toolName}' execution was cancelled before starting");
+                    return;
+                }
                 
-                Debug.Log($"MCP Tool '{currentSelectedTool.name}' executed successfully. Result: {result}");
+                // Call the tool asynchronously
+                var result = await MCPFunctionInvoker.InvokeAsync(toolName, parameters);
+                
+                // Check if execution was cancelled or window is closed
+                if (cancellationToken.IsCancellationRequested || this == null)
+                {
+                    Debug.Log($"MCP Tool '{toolName}' execution was cancelled");
+                    return;
+                }
+                
+                // Display result (only if window is still open)
+                if (this != null && currentToolResultContainer != null)
+                {
+                    string resultText = result?.ToString() ?? "null";
+                    string successText = $"{resultText}";
+                    
+                    SetResultContent(successText, new Color(0.2f, 0.8f, 0.2f), false);
+                    UpdateResultHeaderStatus(true);
+                }
+                
+                // Add to history
+                AddToHistory(toolName, parameterDict, result?.ToString() ?? "null", true);
+                
+                Debug.Log($"MCP Tool '{toolName}' executed successfully. Result: {result}");
             }
             catch (System.Exception ex)
             {
@@ -1286,20 +1395,34 @@ namespace MCP4Unity.Editor
                 {
                     ex = tex.InnerException ?? ex;
                 }
-                string errorText = $"{ex}"; // 移除 "✗ Error:" 前缀
-                SetResultContent(errorText, new Color(0.8f, 0.2f, 0.2f), true);
-                UpdateResultHeaderStatus(false); // 更新header状态显示
                 
-                // Add to history even for errors
-                var parameterDict = new Dictionary<string, string>();
-                foreach (var field in currentToolParameterFields)
+                var toolName = currentSelectedTool?.name ?? "Unknown";
+                string errorText = $"{ex}";
+                
+                // Display error (only if window is still open)
+                if (this != null && currentToolResultContainer != null)
                 {
-                    parameterDict[field.Key] = field.Value.value ?? "";
+                    SetResultContent(errorText, new Color(0.8f, 0.2f, 0.2f), true);
+                    UpdateResultHeaderStatus(false);
                 }
-                AddToHistory(currentSelectedTool.name, parameterDict, errorText, false);
                 
+                // Add error to history
+                var parameterDict = new Dictionary<string, string>();
+                if (currentToolParameterFields != null)
+                {
+                    foreach (var field in currentToolParameterFields)
+                    {
+                        parameterDict[field.Key] = field.Value?.value ?? "";
+                    }
+                }
+                AddToHistory(toolName, parameterDict, errorText, false);
                 
-                Debug.LogError($"Error executing MCP Tool '{currentSelectedTool.name}':\n{ex}");
+                Debug.LogError($"Error executing MCP Tool '{toolName}':\n{ex}");
+            }
+            finally
+            {
+                // Reset executing state in MCPService
+                MCPService.SetToolExecutionState(false);
             }
         }
         
@@ -1400,6 +1523,12 @@ namespace MCP4Unity.Editor
         {
             // 取消监听MCP历史更新
             MCPService.OnHistoryUpdated -= OnMCPHistoryUpdated;
+            
+            // Cancel any ongoing execution
+            MCPService.CancelCurrentToolExecution();
+            
+            // Stop animation
+            StopExecutionAnimation();
         }
         
         void OnMCPHistoryUpdated()
@@ -2720,6 +2849,63 @@ namespace MCP4Unity.Editor
                 Color statusColor = isSuccess ? new Color(0.2f, 0.8f, 0.2f) : new Color(0.8f, 0.2f, 0.2f);
                 currentToolResultHeaderLabel.style.color = statusColor;
             }
+        }
+        
+        // Execution animation methods
+        private void StartExecutionAnimation()
+        {
+            if (executeButton == null) return;
+            
+            // Disable button and set initial state
+            executeButton.SetEnabled(false);
+            animationFrame = 0;
+            
+            // Start animation scheduler
+            animationScheduler = executeButton.schedule.Execute(UpdateExecutionAnimation).Every(200); // Update every 200ms
+        }
+        
+        private void StopExecutionAnimation()
+        {
+            // Stop animation scheduler
+            animationScheduler?.Pause();
+            animationScheduler = null;
+            
+            // Re-enable button and reset text
+            if (executeButton != null && this != null)
+            {
+                executeButton.SetEnabled(true);
+                executeButton.text = "Execute Tool";
+            }
+        }
+        
+        private void UpdateExecutionAnimation()
+        {
+            if (executeButton == null || this == null)
+            {
+                StopExecutionAnimation();
+                return;
+            }
+            
+            // Create spinning animation with dots
+            string[] animationFrames = { "Executing", "Executing.", "Executing..", "Executing..." };
+            executeButton.text = animationFrames[animationFrame % animationFrames.Length];
+            animationFrame++;
+        }
+        
+        // Window lifecycle management
+        void OnDestroy()
+        {
+            // Cancel any ongoing execution
+            MCPService.CancelCurrentToolExecution();
+            
+            // Stop animation
+            StopExecutionAnimation();
+            
+            // Unregister events
+            MCPService.OnStateChange -= UpdateStartBtn;
+            MCPService.OnStateChange -= RefreshTools;
+            MCPService.OnHistoryUpdated -= OnMCPHistoryUpdated;
+            MCPService.OnToolExecutionStateChanged -= OnToolExecutionStateChanged;
         }
     }
 }

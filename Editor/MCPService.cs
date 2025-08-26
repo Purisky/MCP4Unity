@@ -32,6 +32,26 @@ namespace MCP4Unity.Editor
         // MCP执行历史记录
         public static List<ToolExecutionHistory> MCPExecutionHistory { get; private set; } = new List<ToolExecutionHistory>();
         public static Action OnHistoryUpdated;
+        
+        // 工具执行状态管理
+        private static bool _isToolExecuting = false;
+        private static System.Threading.CancellationTokenSource _toolExecutionCancellationSource;
+        private static string _currentExecutingToolName = null;
+        
+        /// <summary>
+        /// 获取当前是否有工具正在执行
+        /// </summary>
+        public static bool IsToolExecuting => _isToolExecuting;
+        
+        /// <summary>
+        /// 获取当前正在执行的工具名称
+        /// </summary>
+        public static string CurrentExecutingToolName => _currentExecutingToolName;
+        
+        /// <summary>
+        /// 工具执行状态变化事件
+        /// </summary>
+        public static Action<bool, string> OnToolExecutionStateChanged;
 
         static JsonSerializerSettings SerializerSettings = new()
         {
@@ -477,6 +497,56 @@ namespace MCP4Unity.Editor
         public static void SaveExecutionHistoryToPrefs()
         {
             SaveExecutionHistory();
+        }
+        
+        /// <summary>
+        /// 设置工具执行状态
+        /// </summary>
+        /// <param name="isExecuting">是否正在执行</param>
+        /// <param name="toolName">工具名称</param>
+        /// <param name="cancellationToken">取消令牌</param>
+        public static void SetToolExecutionState(bool isExecuting, string toolName = null, System.Threading.CancellationToken? cancellationToken = null)
+        {
+            _isToolExecuting = isExecuting;
+            _currentExecutingToolName = isExecuting ? toolName : null;
+            
+            if (isExecuting)
+            {
+                // 如果有新的执行开始，取消之前的执行
+                _toolExecutionCancellationSource?.Cancel();
+                _toolExecutionCancellationSource = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken ?? System.Threading.CancellationToken.None);
+            }
+            else
+            {
+                // 执行结束，清理资源
+                _toolExecutionCancellationSource?.Cancel();
+                _toolExecutionCancellationSource?.Dispose();
+                _toolExecutionCancellationSource = null;
+            }
+            
+            // 通知状态变化
+            OnToolExecutionStateChanged?.Invoke(_isToolExecuting, _currentExecutingToolName);
+        }
+        
+        /// <summary>
+        /// 获取当前执行的取消令牌
+        /// </summary>
+        public static System.Threading.CancellationToken GetCurrentExecutionCancellationToken()
+        {
+            return _toolExecutionCancellationSource?.Token ?? System.Threading.CancellationToken.None;
+        }
+        
+        /// <summary>
+        /// 取消当前工具执行
+        /// </summary>
+        public static void CancelCurrentToolExecution()
+        {
+            if (_isToolExecuting && _toolExecutionCancellationSource != null)
+            {
+                _toolExecutionCancellationSource.Cancel();
+                SetToolExecutionState(false);
+            }
         }
     }
     public class MCPRequest

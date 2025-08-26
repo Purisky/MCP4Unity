@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -67,7 +68,89 @@ namespace MCP4Unity.Editor
                             objects[i] = jToken?.ToObject(type);
                         }
                     }
-                    return tool.MethodInfo.Invoke(null, objects);
+                    
+                    // 调用方法
+                    object result = tool.MethodInfo.Invoke(null, objects);
+                    
+                    // 检查返回值是否为 Task 或 Task<T>
+                    if (result is Task task)
+                    {
+                        // 等待异步任务完成
+                        task.Wait();
+                        
+                        // 检查是否是 Task<T>，如果是则获取结果
+                        if (task.GetType().IsGenericType && task.GetType().GetGenericTypeDefinition() == typeof(Task<>))
+                        {
+                            PropertyInfo resultProperty = task.GetType().GetProperty("Result");
+                            return resultProperty?.GetValue(task);
+                        }
+                        
+                        // 如果是 Task（无返回值），返回 null 或成功消息
+                        return "Async operation completed successfully";
+                    }
+                    
+                    // 同步方法，直接返回结果
+                    return result;
+                }
+                catch (Exception e)
+                {
+                    if (e is TargetInvocationException te) { e = te.InnerException??e; }
+                    throw e;
+                }
+            }
+            throw new Exception( $"Tool {functionName} not found");
+        }
+
+        public static async Task<object> InvokeAsync(string functionName, JObject parameters)
+        {
+            if (Tools.TryGetValue(functionName, out var tool))
+            {
+                try
+                {
+                    // Use orderedProperties to maintain parameter order
+                    Property[] properties = tool.inputSchema.orderedProperties.ToArray();
+                    object[] objects = new object[properties.Length];
+                    for (int i = 0; i < properties.Length; i++)
+                    {
+                        Type type = properties[i].Type;
+                        JToken jToken = parameters.GetValue(properties[i].Name);
+                        
+                        // 容错处理：当参数名是json且需求string时，如果传入的是对象则转换为字符串
+                        if (type == typeof(string) && 
+                            properties[i].Name.Equals("json", StringComparison.OrdinalIgnoreCase) && 
+                            jToken != null && 
+                            (jToken.Type == JTokenType.Object || jToken.Type == JTokenType.Array))
+                        {
+                            objects[i] = jToken.ToString();
+                        }
+                        else
+                        {
+                            objects[i] = jToken?.ToObject(type);
+                        }
+                    }
+                    
+                    // 调用方法
+                    object result = tool.MethodInfo.Invoke(null, objects);
+                    
+                    // 检查返回值是否为 Task 或 Task<T>
+                    if (result is Task task)
+                    {
+                        // 异步等待任务完成
+                        await task;
+                        
+                        // 检查是否是 Task<T>，如果是则获取结果
+                        if (task.GetType().IsGenericType && task.GetType().GetGenericTypeDefinition() == typeof(Task<>))
+                        {
+                            PropertyInfo resultProperty = task.GetType().GetProperty("Result");
+                            return resultProperty?.GetValue(task);
+                        }
+                        
+                        // 如果是 Task（无返回值），返回成功消息
+                        return "Async operation completed successfully";
+                    }
+                    
+                    // 同步方法，直接返回结果
+                    return result;
                 }
                 catch (Exception e)
                 {
