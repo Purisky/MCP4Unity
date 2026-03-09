@@ -1,1 +1,1000 @@
-﻿using System;using System.Collections.Generic;using System.Diagnostics;using System.IO;using System.Net;using System.Net.Sockets;using System.Threading;using System.Threading.Tasks;using Newtonsoft.Json;using Newtonsoft.Json.Linq;using UnityEditor;using UnityEngine;using Debug = UnityEngine.Debug;namespace MCP4Unity.Editor{    [InitializeOnLoad]    public class MCPService    {        public static MCPService Inst = new();        public bool Running { get; private set; }        private CancellationTokenSource _cancellationTokenSource;        HttpListener HttpListener;        private readonly object _stateLock = new object();        private bool _isStarting;        public static Action OnStateChange;        private const string MCPConsoleFolderName = "Assets/MCP4Unity/MCPConsole~";        private const string HistoryPrefKey = "MCP4Unity_ExecutionHistory";        private const string ConfigFileName = "Assets/MCP4Unity/mcp_config.json";        private const string EndpointStateFolderName = "MCP4Unity";        private const string EndpointStateFileName = "mcp_endpoint.json";        private const int DefaultPort = 8080;        private string _currentListenerPrefix = BuildPrefix(DefaultPort);                /// <summary>        /// 获取当前监听端口。优先从 mcp_endpoint.json 读取，保证与文件完全一致。        /// </summary>        public int CurrentPort        {            get            {                try                {                    string path = GetEndpointStateFilePath();                    if (File.Exists(path))                    {                        string json = File.ReadAllText(path);                        var endpoint = JsonConvert.DeserializeObject<MCPPublishedEndpoint>(json);                        if (endpoint != null && endpoint.Port > 0)                            return endpoint.Port;                    }                }                catch { }                return GetConfiguredPort();            }        }                // 跨平台可执行文件名和构建脚本名        private static string MCPConsoleExeName => Application.platform == RuntimePlatform.WindowsEditor ? "MCPConsole.exe" : "MCPConsole";        private static string BuildScriptName => Application.platform == RuntimePlatform.WindowsEditor ? "build.bat" : "build.sh";                // MCP执行历史记录        public static List<ToolExecutionHistory> MCPExecutionHistory { get; private set; } = new List<ToolExecutionHistory>();        public static Action OnHistoryUpdated;                // 工具执行状态管理        private static bool _isToolExecuting = false;        private static System.Threading.CancellationTokenSource _toolExecutionCancellationSource;        private static string _currentExecutingToolName = null;                /// <summary>        /// 获取当前是否有工具正在执行        /// </summary>        public static bool IsToolExecuting => _isToolExecuting;                /// <summary>        /// 获取当前正在执行的工具名称        /// </summary>        public static string CurrentExecutingToolName => _currentExecutingToolName;                /// <summary>        /// 工具执行状态变化事件        /// </summary>        public static Action<bool, string> OnToolExecutionStateChanged;        static JsonSerializerSettings SerializerSettings = new()        {            NullValueHandling = NullValueHandling.Ignore,        };                static MCPService()        {            // 加载持久化的历史记录            LoadExecutionHistory();                        // 检查MCPConsole.exe是否存在，如果不存在则运行build.bat            CheckAndBuildMCPConsole();                        if (EditorPrefs.GetBool("MCP4Unity_Auto_Start", true))            {                Inst.Start();            }            EditorApplication.delayCall += () => OnStateChange?.Invoke();        }          public static void CheckAndBuildMCPConsole()        {            try            {                // 获取MCPConsole路径（相对于项目根目录）                string projectPath = Path.GetDirectoryName(Application.dataPath);                string mcpConsolePath = Path.Combine(projectPath, MCPConsoleFolderName);                string mcpConsoleExePath = Path.Combine(mcpConsolePath, MCPConsoleExeName);                string buildScriptPath = Path.Combine(mcpConsolePath, BuildScriptName);                                // 检查文件夹是否存在                if (!Directory.Exists(mcpConsolePath))                {                    UnityEngine.Debug.LogWarning($"MCPConsole folder not found at: {mcpConsolePath}");                    return;                }                                // 检查可执行文件是否存在                if (!File.Exists(mcpConsoleExePath))                {                    UnityEngine.Debug.Log($"MCPConsole not found. Running build script...");                                        // 检查构建脚本是否存在                    if (!File.Exists(buildScriptPath))                    {                        UnityEngine.Debug.LogError($"Build script not found at: {buildScriptPath}");                        return;                    }                                        // 运行构建脚本                    ProcessStartInfo psi;                    if (Application.platform == RuntimePlatform.WindowsEditor)                    {                        // Windows: 直接执行批处理文件                        psi = new ProcessStartInfo                        {                            FileName = buildScriptPath,                            WorkingDirectory = mcpConsolePath,                            UseShellExecute = true,                            CreateNoWindow = true,                            WindowStyle = ProcessWindowStyle.Hidden                        };                    }                    else                    {                        // macOS/Linux: 使用bash执行shell脚本，设置PATH环境变量                        // 检测系统原生架构并强制使用，避免从Unity的x86_64继承错误架构                        string nativeArch = GetNativeArchitecture();                        Debug.Log($"Detected native architecture: {nativeArch}" );                        psi = new ProcessStartInfo                        {                            FileName = "arch",                            Arguments = $"-{nativeArch} /bin/bash \"{buildScriptPath}\"",                            WorkingDirectory = mcpConsolePath,                            UseShellExecute = false,                            CreateNoWindow = true,                            RedirectStandardOutput = true,                            RedirectStandardError = true                        };                                                // 确保dotnet能被找到                        psi.EnvironmentVariables["PATH"] = "/usr/local/share/dotnet:/usr/local/bin:/opt/dotnet:" +                                                           Environment.GetEnvironmentVariable("PATH");                    }                                        using (Process process = Process.Start(psi))                    {                        if (process != null)                        {                            if (!Application.platform.Equals(RuntimePlatform.WindowsEditor))                            {                                // 对于macOS/Linux，读取输出信息                                string output = process.StandardOutput.ReadToEnd();                                string error = process.StandardError.ReadToEnd();                                                                process.WaitForExit();                                                                if (process.ExitCode != 0)                                {                                    UnityEngine.Debug.LogError($"Build script failed with exit code {process.ExitCode}");                                    if (!string.IsNullOrEmpty(output)) UnityEngine.Debug.Log($"Output: {output}");                                    if (!string.IsNullOrEmpty(error)) UnityEngine.Debug.LogError($"Error: {error}");                                }                                else                                {                                    UnityEngine.Debug.Log($"Build script completed successfully");                                    if (!string.IsNullOrEmpty(output)) UnityEngine.Debug.Log($"Output: {output}");                                }                            }                            else                            {                                process.WaitForExit();                            }                                                        // 检查编译结果                            if (File.Exists(mcpConsoleExePath))                            {                                UnityEngine.Debug.Log($"MCPConsole successfully built at: {mcpConsoleExePath}");                            }                            else                            {                                UnityEngine.Debug.LogError($"Failed to build MCPConsole at: {mcpConsoleExePath}");                                // 尝试查找可执行文件的实际位置                                string[] possiblePaths = {                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", MCPConsoleExeName),                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "osx-arm64", MCPConsoleExeName),                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "osx-x64", MCPConsoleExeName),                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "linux-arm64", MCPConsoleExeName),                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "linux-x64", MCPConsoleExeName)                                };                                                                foreach (string path in possiblePaths)                                {                                    if (File.Exists(path))                                    {                                        UnityEngine.Debug.Log($"Found MCPConsole at: {path}");                                        // 尝试复制到预期位置                                        try                                        {                                            File.Copy(path, mcpConsoleExePath, true);                                            UnityEngine.Debug.Log($"Copied MCPConsole to expected location: {mcpConsoleExePath}");                                        }                                        catch (Exception copyEx)                                        {                                            UnityEngine.Debug.LogError($"Failed to copy MCPConsole: {copyEx.Message}");                                        }                                        break;                                    }                                }                            }                        }                        else                        {                            UnityEngine.Debug.LogError("Failed to start build process");                        }                    }                }            }            catch (Exception ex)            {                UnityEngine.Debug.LogError($"Error checking/building MCPConsole: {ex.Message}");            }        }                /// <summary>        /// 获取系统的原生架构        /// </summary>        private static string GetNativeArchitecture()        {            try            {                // 在macOS上使用sysctl来获取真实的硬件架构，不受当前进程架构影响                ProcessStartInfo psi = new ProcessStartInfo                {                    FileName = "sysctl",                    Arguments = "-n hw.optional.arm64",                    UseShellExecute = false,                    RedirectStandardOutput = true,                    RedirectStandardError = true,                    CreateNoWindow = true                };                                using (Process process = Process.Start(psi))                {                    if (process != null)                    {                        string output = process.StandardOutput.ReadToEnd().Trim();                        string error = process.StandardError.ReadToEnd().Trim();                        process.WaitForExit();                                                // 如果hw.optional.arm64返回1，说明是ARM64硬件                        if (output == "1")                        {                            UnityEngine.Debug.Log("Detected native architecture: arm64");                            return "arm64";                        }                        else                        {                            UnityEngine.Debug.Log("Detected native architecture: x86_64");                            return "x86_64";                        }                    }                }            }            catch (Exception ex)            {                UnityEngine.Debug.LogWarning($"Failed to detect native architecture using sysctl: {ex.Message}");            }                        // 备用方法：尝试使用arch命令强制检测            try            {                ProcessStartInfo psi = new ProcessStartInfo                {                    FileName = "arch",                    Arguments = "-arm64 uname -m",                    UseShellExecute = false,                    RedirectStandardOutput = true,                    RedirectStandardError = true,                    CreateNoWindow = true                };                                using (Process process = Process.Start(psi))                {                    if (process != null)                    {                        string output = process.StandardOutput.ReadToEnd().Trim();                        string error = process.StandardError.ReadToEnd().Trim();                        process.WaitForExit();                                                // 如果能成功运行arch -arm64，说明是ARM64硬件                        if (process.ExitCode == 0 && output == "arm64")                        {                            UnityEngine.Debug.Log("Detected native architecture (fallback): arm64");                            return "arm64";                        }                    }                }            }            catch (Exception ex)            {                UnityEngine.Debug.LogWarning($"Failed to detect native architecture using arch: {ex.Message}");            }                        // 如果所有检测都失败，默认使用x86_64（Intel Mac的兼容性）            UnityEngine.Debug.LogWarning("Could not detect native architecture, falling back to x86_64");            return "x86_64";        }                public void Start()        {            lock (_stateLock)            {                if (Running || _isStarting)                {                    return;                }                _isStarting = true;            }            try            {                StopHttpListener();                _cancellationTokenSource?.Cancel();                _cancellationTokenSource = new CancellationTokenSource();                int port = GetConfiguredPort();                if (!TryStartOnPort(port))                {                    Debug.LogWarning($"MCPService start failed. Could not bind to port {port}.");                    lock (_stateLock) { _isStarting = false; }                    return;                }                string selectedPrefix = BuildPrefix(port);                _currentListenerPrefix = selectedPrefix;                SaveEndpointState(port, selectedPrefix);                Application.runInBackground = true;                Debug.Log($"MCPService listening on {selectedPrefix}");                Running = true;                OnStateChange?.Invoke();                // Run the listener loop on a ThreadPool thread to avoid                // Unity's UnitySynchronizationContext capturing async continuations.                // Without this, awaits in the loop would need the main thread to resume,                // but the main thread is idle in Editor → deadlock.                var cts = _cancellationTokenSource;                var listener = HttpListener;                Task.Run(() => ListenerLoopAsync(listener, port, cts.Token), cts.Token);            }            catch (Exception ex) when (IsAddressAlreadyInUse(ex))            {                Debug.LogWarning($"MCPService start failed. Address already in use for prefix: {_currentListenerPrefix}");                CleanupAfterStop();            }            catch (Exception ex)            {                Debug.LogError($"Failed to start MCPService: {ex}");                CleanupAfterStop();            }        }        /// <summary>        /// Try to bind the HttpListener on the given port.        /// If the port is already in use, attempts to kill the zombie listener        /// (if it belongs to our own process) and retries once.        /// </summary>        private bool TryStartOnPort(int port)        {            try            {                TryStartHttpListener(port);                return true;            }            catch (Exception ex) when (IsAddressAlreadyInUse(ex))            {                Debug.Log($"Port {port} in use — attempting to reclaim from zombie listener...");                                // Check if the endpoint file says this port belongs to our PID (zombie from pre-recompile)                try                {                    string path = GetEndpointStateFilePath();                    if (File.Exists(path))                    {                        string json = File.ReadAllText(path);                        var endpoint = JsonConvert.DeserializeObject<MCPPublishedEndpoint>(json);                        if (endpoint != null && endpoint.Port == port && endpoint.Pid == Process.GetCurrentProcess().Id)                        {                            Debug.Log($"Endpoint file confirms port {port} belongs to our PID — waiting briefly for zombie self-termination...");                            // The zombie listener checks staleness every 2s.                             // Overwrite the endpoint file with a different port to trigger its self-termination.                            SaveEndpointState(0, "");                            Thread.Sleep(3000);                                                        // Retry after zombie should have exited                            try                            {                                TryStartHttpListener(port);                                return true;                            }                            catch (Exception retryEx) when (IsAddressAlreadyInUse(retryEx))                            {                                Debug.LogWarning($"Port {port} still in use after zombie kill attempt.");                            }                        }                    }                }                catch (Exception zombieEx)                {                    Debug.LogWarning($"Zombie reclaim failed: {zombieEx.Message}");                }                                return false;            }        }        private const int StalenessCheckIntervalMs = 2000;        private async Task ListenerLoopAsync(HttpListener listener, int boundPort, CancellationToken token)        {            try            {                var lastStalenessCheck = DateTime.UtcNow;                while (!token.IsCancellationRequested)                {                    var getContextTask = listener.GetContextAsync();                    var completedTask = await Task.WhenAny(                        getContextTask,                        Task.Delay(StalenessCheckIntervalMs, token)).ConfigureAwait(false);                    if (token.IsCancellationRequested)                        break;                    if (completedTask == getContextTask)                    {                        var httpContext = await getContextTask.ConfigureAwait(false);                        _ = HandleHttpRequest(httpContext);                    }                    if ((DateTime.UtcNow - lastStalenessCheck).TotalMilliseconds >= StalenessCheckIntervalMs)                    {                        lastStalenessCheck = DateTime.UtcNow;                        if (IsEndpointStale(boundPort))                        {                            Debug.Log($"MCPService on port {boundPort} detected newer endpoint — self-terminating.");                            break;                        }                    }                }            }            catch (OperationCanceledException) { }            catch (ObjectDisposedException) { }            catch (HttpListenerException) { }            catch (Exception ex)            {                Debug.LogError($"MCPService listener loop error: {ex}");            }            finally            {                try { listener.Stop(); } catch { }                try { listener.Close(); } catch { }            }        }        private static bool IsEndpointStale(int boundPort)        {            try            {                string path = GetEndpointStateFilePath();                if (!File.Exists(path))                    return true;                string json = File.ReadAllText(path);                var endpoint = JsonConvert.DeserializeObject<MCPPublishedEndpoint>(json);                if (endpoint == null)                    return true;                return endpoint.Port != boundPort;            }            catch            {                return false;            }        }        private void CleanupAfterStop()        {            StopHttpListener();            DeleteEndpointState();            bool shouldNotify;            lock (_stateLock)            {                shouldNotify = Running;                Running = false;                _isStarting = false;            }            if (shouldNotify)            {                OnStateChange?.Invoke();            }        }        public void Stop()        {            bool wasRunning;            lock (_stateLock)            {                wasRunning = Running;                Running = false;                _isStarting = false;            }            _cancellationTokenSource?.Cancel();            StopHttpListener();            DeleteEndpointState();            _cancellationTokenSource?.Dispose();            _cancellationTokenSource = null;            if (wasRunning)            {                OnStateChange?.Invoke();            }        }        private static bool IsAddressAlreadyInUse(Exception ex)        {            Exception current = ex;            while (current != null)            {                if (current is SocketException socketEx && socketEx.SocketErrorCode == SocketError.AddressAlreadyInUse)                {                    return true;                }                current = current.InnerException;            }            return false;        }        private bool TryStartHttpListener(int port)        {            if (port <= 0)            {                port = DefaultPort;            }            string prefix = BuildPrefix(port);            HttpListener tempListener = new HttpListener();            tempListener.Prefixes.Add(prefix);            try            {                tempListener.Start();                HttpListener = tempListener;                return true;            }            catch            {                try { tempListener.Close(); } catch { }                throw;            }        }        private static string BuildPrefix(int port)        {            // Use weak wildcard (*) so that requests with any Host header            // (localhost, [::1], 127.0.0.1, etc.) are accepted.            // Unlike '+', '*' does not require admin/urlacl on Windows.            return $"http://*:{port}/mcp/";        }        private static string GetEndpointStateFilePath()        {            string projectPath = Path.GetDirectoryName(Application.dataPath);            string directoryPath = Path.Combine(projectPath, "Library", EndpointStateFolderName);            return Path.Combine(directoryPath, EndpointStateFileName);        }        private static void SaveEndpointState(int port, string prefix)        {            try            {                string stateFilePath = GetEndpointStateFilePath();                string stateDirectory = Path.GetDirectoryName(stateFilePath);                if (!Directory.Exists(stateDirectory))                {                    Directory.CreateDirectory(stateDirectory);                }                var endpointState = new MCPPublishedEndpoint                {                    Url = $"http://127.0.0.1:{port}/mcp/",                    Port = port,                    Pid = Process.GetCurrentProcess().Id,                    ProjectPath = Path.GetDirectoryName(Application.dataPath),                    UpdatedAtUtc = DateTime.UtcNow.ToString("O")                };                string json = JsonConvert.SerializeObject(endpointState, Formatting.Indented);                File.WriteAllText(stateFilePath, json);            }            catch (Exception ex)            {                Debug.LogWarning($"Failed to save MCP endpoint state: {ex.Message}");            }        }        private static void DeleteEndpointState()        {            try            {                string stateFilePath = GetEndpointStateFilePath();                if (File.Exists(stateFilePath))                {                    File.Delete(stateFilePath);                }            }            catch (Exception ex)            {                Debug.LogWarning($"Failed to delete MCP endpoint state: {ex.Message}");            }        }        private class MCPPublishedEndpoint        {            public string Url;            public int Port;            public int Pid;            public string ProjectPath;            public string UpdatedAtUtc;        }        private class MCPConfig        {            public int Port = DefaultPort;        }        private static string GetConfigFilePath()        {            string projectPath = Path.GetDirectoryName(Application.dataPath);            return Path.Combine(projectPath, ConfigFileName);        }        public static int GetConfiguredPort()        {            try            {                string path = GetConfigFilePath();                if (File.Exists(path))                {                    string json = File.ReadAllText(path);                    var config = JsonConvert.DeserializeObject<MCPConfig>(json);                    if (config != null && config.Port > 0 && config.Port <= 65535)                        return config.Port;                }            }            catch { }            return DefaultPort;        }        public static void SaveConfiguredPort(int port)        {            try            {                string path = GetConfigFilePath();                string dir = Path.GetDirectoryName(path);                if (!Directory.Exists(dir))                    Directory.CreateDirectory(dir);                var config = new MCPConfig { Port = port };                string json = JsonConvert.SerializeObject(config, Formatting.Indented);                File.WriteAllText(path, json);            }            catch (Exception ex)            {                Debug.LogWarning($"Failed to save MCP config: {ex.Message}");            }        }        private void StopHttpListener()        {            if (HttpListener == null)            {                return;            }            try            {                if (HttpListener.IsListening)                {                    HttpListener.Stop();                }            }            catch (Exception ex)            {                Debug.LogWarning($"Error while stopping HttpListener: {ex.Message}");            }            try            {                HttpListener.Close();            }            catch (Exception ex)            {                Debug.LogWarning($"Error while closing HttpListener: {ex.Message}");            }            finally            {                HttpListener = null;            }        }        private async Task HandleHttpRequest(HttpListenerContext context)        {            try            {                string requestBody;                using (var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding))                {                    requestBody = await reader.ReadToEndAsync().ConfigureAwait(false);                }                MCPResponse response = await ProcessRequestAsync(requestBody).ConfigureAwait(false);                string responseContent = JsonConvert.SerializeObject(response, SerializerSettings);                                context.Response.Headers.Add("Access-Control-Allow-Origin", "*");                context.Response.Headers.Add("Access-Control-Allow-Methods", "POST, OPTIONS");                context.Response.Headers.Add("Access-Control-Allow-Headers", "Content-Type");                                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(responseContent);                context.Response.ContentLength64 = buffer.Length;                context.Response.ContentType = "application/json";                await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length).ConfigureAwait(false);            }            catch (Exception ex)            {                Debug.LogError($"Error handling HTTP request: {ex.Message}");                context.Response.StatusCode = 500;            }            finally            {                context.Response.Close();            }        }        /// <summary>        /// 异步处理请求。工具调用通过 EditorMainThread.RunAsync 在主线程执行。        /// </summary>        private async Task<MCPResponse> ProcessRequestAsync(string requestBody)        {            try            {                MCPRequest request = JsonConvert.DeserializeObject<MCPRequest>(requestBody);                if (request == null || string.IsNullOrEmpty(request.method))                {                    return new MCPResponse { success = false, error = "Invalid request: missing method" };                }                switch (request.method.ToLower())                {                    case "listtools":                        return MCPResponse.Success(MCPFunctionInvoker.GetTools());                    case "calltool":                        ToolArgs toolArgs = JsonConvert.DeserializeObject<ToolArgs>(request.params_);                                                var parameters = new Dictionary<string, string>();                        if (toolArgs.arguments != null)                        {                            foreach (var prop in toolArgs.arguments.Properties())                            {                                parameters[prop.Name] = prop.Value?.ToString() ?? "";                            }                        }                                                try                        {                            object res = await EditorMainThread.RunAsync(                                () => MCPFunctionInvoker.InvokeAsync(toolArgs.name, toolArgs.arguments)).ConfigureAwait(false);                            string resultStr = res?.ToString() ?? "null";                                                        AddMCPExecutionHistory(toolArgs.name, parameters, resultStr, true);                                                        return MCPResponse.Success(res);                        }                        catch (Exception invokeEx)                        {                            string fullErrorMessage = invokeEx.ToString();                            AddMCPExecutionHistory(toolArgs.name, parameters, fullErrorMessage, false);                            return MCPResponse.Error(fullErrorMessage);                        }                }                return MCPResponse.Error($"unknown method:{request.method}");            }            catch (Exception ex)            {                Debug.LogError($"Error processing request: {ex.Message}");                return MCPResponse.Error(ex);            }        }                        /// <summary>        /// 添加MCP工具执行历史记录        /// </summary>        public static void AddMCPExecutionHistory(string toolName, Dictionary<string, string> parameters, string result, bool success)        {            AddExecutionHistory(toolName, parameters, result, success, ToolExecutionSource.MCP);        }                /// <summary>        /// 添加执行历史记录（通用方法）        /// </summary>        public static void AddExecutionHistory(string toolName, Dictionary<string, string> parameters, string result, bool success, ToolExecutionSource source)        {            var historyItem = new ToolExecutionHistory(toolName, parameters, result, success, source);            MCPExecutionHistory.Add(historyItem);                        // 保持最多50条记录            if (MCPExecutionHistory.Count > 50)            {                MCPExecutionHistory.RemoveAt(0);            }                        // 保存历史记录            SaveExecutionHistory();                        // 通知历史更新（确保在主线程执行，因为 MCP 请求来自后台线程）            EditorApplication.delayCall += () => OnHistoryUpdated?.Invoke();        }                /// <summary>        /// 加载执行历史记录        /// </summary>        private static void LoadExecutionHistory()        {            try            {                string historyJson = EditorPrefs.GetString(HistoryPrefKey, "[]");                var historyList = JsonConvert.DeserializeObject<List<ToolExecutionHistory>>(historyJson);                if (historyList != null)                {                    MCPExecutionHistory.Clear();                    MCPExecutionHistory.AddRange(historyList);                }            }            catch (Exception ex)            {                Debug.LogWarning($"Failed to load MCP execution history: {ex.Message}");                MCPExecutionHistory.Clear();            }        }                /// <summary>        /// 保存执行历史记录        /// </summary>        private static void SaveExecutionHistory()        {            try            {                string historyJson = JsonConvert.SerializeObject(MCPExecutionHistory, Formatting.None);                EditorApplication.delayCall += () =>                {                    try { EditorPrefs.SetString(HistoryPrefKey, historyJson); }                    catch (Exception ex) { Debug.LogWarning($"Failed to save MCP execution history: {ex.Message}"); }                };            }            catch (Exception ex)            {                Debug.LogWarning($"Failed to serialize MCP execution history: {ex.Message}");            }        }                /// <summary>        /// 公开的保存执行历史记录方法        /// </summary>        public static void SaveExecutionHistoryToPrefs()        {            SaveExecutionHistory();        }                /// <summary>        /// 设置工具执行状态        /// </summary>        /// <param name="isExecuting">是否正在执行</param>        /// <param name="toolName">工具名称</param>        /// <param name="cancellationToken">取消令牌</param>        public static void SetToolExecutionState(bool isExecuting, string toolName = null, System.Threading.CancellationToken? cancellationToken = null)        {            _isToolExecuting = isExecuting;            _currentExecutingToolName = isExecuting ? toolName : null;                        if (isExecuting)            {                // 如果有新的执行开始，取消之前的执行                _toolExecutionCancellationSource?.Cancel();                _toolExecutionCancellationSource = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(                    cancellationToken ?? System.Threading.CancellationToken.None);            }            else            {                // 执行结束，清理资源                _toolExecutionCancellationSource?.Cancel();                _toolExecutionCancellationSource?.Dispose();                _toolExecutionCancellationSource = null;            }                        // 通知状态变化            OnToolExecutionStateChanged?.Invoke(_isToolExecuting, _currentExecutingToolName);        }                /// <summary>        /// 获取当前执行的取消令牌        /// </summary>        public static System.Threading.CancellationToken GetCurrentExecutionCancellationToken()        {            return _toolExecutionCancellationSource?.Token ?? System.Threading.CancellationToken.None;        }                /// <summary>        /// 取消当前工具执行        /// </summary>        public static void CancelCurrentToolExecution()        {            if (_isToolExecuting && _toolExecutionCancellationSource != null)            {                _toolExecutionCancellationSource.Cancel();                SetToolExecutionState(false);            }        }    }    public class MCPRequest    {        public string method;        [JsonProperty("params")]        public string params_;    }    public class ToolArgs    {        public string name;        public JObject arguments;    }    public class MCPResponse    {        public bool success;        public object result;        public string error;        public static MCPResponse Success(object result)        {             return new MCPResponse            {                success = true,                result = result            };        }        public static MCPResponse Error(string error)        {            Debug.Log(error);            return new MCPResponse            {                success = false,                error = error            };        }        public static MCPResponse Error(Exception ex) => Error(ex.ToString());    }}
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+using System.Threading.Tasks;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using UnityEditor;
+using UnityEngine;
+using Debug = UnityEngine.Debug;
+
+namespace MCP4Unity.Editor
+{
+    [InitializeOnLoad]
+    public class MCPService
+    {
+        public static MCPService Inst = new();
+        public bool Running { get; private set; }
+        private CancellationTokenSource _cancellationTokenSource;
+        HttpListener HttpListener;
+        private readonly object _stateLock = new object();
+        private bool _isStarting;
+
+        public static Action OnStateChange;
+        private const string MCPConsoleFolderName = "Assets/MCP4Unity/MCPConsole~";
+        private const string HistoryPrefKey = "MCP4Unity_ExecutionHistory";
+        private const string ConfigFileName = "Assets/MCP4Unity/mcp_config.json";
+        private const string EndpointStateFolderName = "MCP4Unity";
+        private const string EndpointStateFileName = "mcp_endpoint.json";
+        private const int DefaultPort = 8080;
+        private string _currentListenerPrefix = BuildPrefix(DefaultPort);
+        
+        /// <summary>
+        /// 获取当前监听端口。优先从 mcp_endpoint.json 读取，保证与文件完全一致。
+        /// </summary>
+        public int CurrentPort
+        {
+            get
+            {
+                try
+                {
+                    string path = GetEndpointStateFilePath();
+                    if (File.Exists(path))
+                    {
+                        string json = File.ReadAllText(path);
+                        var endpoint = JsonConvert.DeserializeObject<MCPPublishedEndpoint>(json);
+                        if (endpoint != null && endpoint.Port > 0)
+                            return endpoint.Port;
+                    }
+                }
+                catch { }
+                return GetConfiguredPort();
+            }
+        }
+        
+        // 跨平台可执行文件名和构建脚本名
+        private static string MCPConsoleExeName => Application.platform == RuntimePlatform.WindowsEditor ? "MCPConsole.exe" : "MCPConsole";
+        private static string BuildScriptName => Application.platform == RuntimePlatform.WindowsEditor ? "build.bat" : "build.sh";
+        
+        // MCP执行历史记录
+        public static List<ToolExecutionHistory> MCPExecutionHistory { get; private set; } = new List<ToolExecutionHistory>();
+        public static Action OnHistoryUpdated;
+        
+        // 工具执行状态管理
+        private static bool _isToolExecuting = false;
+        private static System.Threading.CancellationTokenSource _toolExecutionCancellationSource;
+        private static string _currentExecutingToolName = null;
+        
+        /// <summary>
+        /// 获取当前是否有工具正在执行
+        /// </summary>
+        public static bool IsToolExecuting => _isToolExecuting;
+        
+        /// <summary>
+        /// 获取当前正在执行的工具名称
+        /// </summary>
+        public static string CurrentExecutingToolName => _currentExecutingToolName;
+        
+        /// <summary>
+        /// 工具执行状态变化事件
+        /// </summary>
+        public static Action<bool, string> OnToolExecutionStateChanged;
+
+        static JsonSerializerSettings SerializerSettings = new()
+        {
+            NullValueHandling = NullValueHandling.Ignore,
+        };
+        
+        static MCPService()
+        {
+            // 加载持久化的历史记录
+            LoadExecutionHistory();
+            
+            // 检查MCPConsole.exe是否存在，如果不存在则运行build.bat
+            CheckAndBuildMCPConsole();
+            
+            if (EditorPrefs.GetBool("MCP4Unity_Auto_Start", true))
+            {
+                Inst.Start();
+            }
+
+            EditorApplication.delayCall += () => OnStateChange?.Invoke();
+        }  
+        public static void CheckAndBuildMCPConsole()
+        {
+            try
+            {
+                // 获取MCPConsole路径（相对于项目根目录）
+                string projectPath = Path.GetDirectoryName(Application.dataPath);
+                string mcpConsolePath = Path.Combine(projectPath, MCPConsoleFolderName);
+                string mcpConsoleExePath = Path.Combine(mcpConsolePath, MCPConsoleExeName);
+                string buildScriptPath = Path.Combine(mcpConsolePath, BuildScriptName);
+                
+                // 检查文件夹是否存在
+                if (!Directory.Exists(mcpConsolePath))
+                {
+                    UnityEngine.Debug.LogWarning($"MCPConsole folder not found at: {mcpConsolePath}");
+                    return;
+                }
+                
+                // 检查可执行文件是否存在
+                if (!File.Exists(mcpConsoleExePath))
+                {
+                    UnityEngine.Debug.Log($"MCPConsole not found. Running build script...");
+                    
+                    // 检查构建脚本是否存在
+                    if (!File.Exists(buildScriptPath))
+                    {
+                        UnityEngine.Debug.LogError($"Build script not found at: {buildScriptPath}");
+                        return;
+                    }
+                    
+                    // 运行构建脚本
+                    ProcessStartInfo psi;
+                    if (Application.platform == RuntimePlatform.WindowsEditor)
+                    {
+                        // Windows: 直接执行批处理文件
+                        psi = new ProcessStartInfo
+                        {
+                            FileName = buildScriptPath,
+                            WorkingDirectory = mcpConsolePath,
+                            UseShellExecute = true,
+                            CreateNoWindow = true,
+                            WindowStyle = ProcessWindowStyle.Hidden
+                        };
+                    }
+                    else
+                    {
+                        // macOS/Linux: 使用bash执行shell脚本，设置PATH环境变量
+                        // 检测系统原生架构并强制使用，避免从Unity的x86_64继承错误架构
+                        string nativeArch = GetNativeArchitecture();
+                        Debug.Log($"Detected native architecture: {nativeArch}" );
+                        psi = new ProcessStartInfo
+                        {
+                            FileName = "arch",
+                            Arguments = $"-{nativeArch} /bin/bash \"{buildScriptPath}\"",
+                            WorkingDirectory = mcpConsolePath,
+                            UseShellExecute = false,
+                            CreateNoWindow = true,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true
+                        };
+                        
+                        // 确保dotnet能被找到
+                        psi.EnvironmentVariables["PATH"] = "/usr/local/share/dotnet:/usr/local/bin:/opt/dotnet:" + 
+                                                          Environment.GetEnvironmentVariable("PATH");
+                    }
+                    
+                    using (Process process = Process.Start(psi))
+                    {
+                        if (process != null)
+                        {
+                            if (!Application.platform.Equals(RuntimePlatform.WindowsEditor))
+                            {
+                                // 对于macOS/Linux，读取输出信息
+                                string output = process.StandardOutput.ReadToEnd();
+                                string error = process.StandardError.ReadToEnd();
+                                
+                                process.WaitForExit();
+                                
+                                if (process.ExitCode != 0)
+                                {
+                                    UnityEngine.Debug.LogError($"Build script failed with exit code {process.ExitCode}");
+                                    if (!string.IsNullOrEmpty(output)) UnityEngine.Debug.Log($"Output: {output}");
+                                    if (!string.IsNullOrEmpty(error)) UnityEngine.Debug.LogError($"Error: {error}");
+                                }
+                                else
+                                {
+                                    UnityEngine.Debug.Log($"Build script completed successfully");
+                                    if (!string.IsNullOrEmpty(output)) UnityEngine.Debug.Log($"Output: {output}");
+                                }
+                            }
+                            else
+                            {
+                                process.WaitForExit();
+                            }
+                            
+                            // 检查编译结果
+                            if (File.Exists(mcpConsoleExePath))
+                            {
+                                UnityEngine.Debug.Log($"MCPConsole successfully built at: {mcpConsoleExePath}");
+                            }
+                            else
+                            {
+                                UnityEngine.Debug.LogError($"Failed to build MCPConsole at: {mcpConsoleExePath}");
+                                // 尝试查找可执行文件的实际位置
+                                string[] possiblePaths = {
+                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", MCPConsoleExeName),
+                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "osx-arm64", MCPConsoleExeName),
+                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "osx-x64", MCPConsoleExeName),
+                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "linux-arm64", MCPConsoleExeName),
+                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "linux-x64", MCPConsoleExeName)
+                                };
+                                
+                                foreach (string path in possiblePaths)
+                                {
+                                    if (File.Exists(path))
+                                    {
+                                        UnityEngine.Debug.Log($"Found MCPConsole at: {path}");
+                                        // 尝试复制到预期位置
+                                        try
+                                        {
+                                            File.Copy(path, mcpConsoleExePath, true);
+                                            UnityEngine.Debug.Log($"Copied MCPConsole to expected location: {mcpConsoleExePath}");
+                                        }
+                                        catch (Exception copyEx)
+                                        {
+                                            UnityEngine.Debug.LogError($"Failed to copy MCPConsole: {copyEx.Message}");
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        else
+                        {
+                            UnityEngine.Debug.LogError("Failed to start build process");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"Error checking/building MCPConsole: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// 获取系统的原生架构
+        /// </summary>
+        private static string GetNativeArchitecture()
+        {
+            try
+            {
+                // 在macOS上使用sysctl来获取真实的硬件架构，不受当前进程架构影响
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "sysctl",
+                    Arguments = "-n hw.optional.arm64",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                
+                using (Process process = Process.Start(psi))
+                {
+                    if (process != null)
+                    {
+                        string output = process.StandardOutput.ReadToEnd().Trim();
+                        string error = process.StandardError.ReadToEnd().Trim();
+                        process.WaitForExit();
+                        
+                        // 如果hw.optional.arm64返回1，说明是ARM64硬件
+                        if (output == "1")
+                        {
+                            UnityEngine.Debug.Log("Detected native architecture: arm64");
+                            return "arm64";
+                        }
+                        else
+                        {
+                            UnityEngine.Debug.Log("Detected native architecture: x86_64");
+                            return "x86_64";
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogWarning($"Failed to detect native architecture using sysctl: {ex.Message}");
+            }
+            
+            // 备用方法：尝试使用arch命令强制检测
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "arch",
+                    Arguments = "-arm64 uname -m",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                
+                using (Process process = Process.Start(psi))
+                {
+                    if (process != null)
+                    {
+                        string output = process.StandardOutput.ReadToEnd().Trim();
+                        string error = process.StandardError.ReadToEnd().Trim();
+                        process.WaitForExit();
+                        
+                        // 如果能成功运行arch -arm64，说明是ARM64硬件
+                        if (process.ExitCode == 0 && output == "arm64")
+                        {
+                            UnityEngine.Debug.Log("Detected native architecture (fallback): arm64");
+                            return "arm64";
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogWarning($"Failed to detect native architecture using arch: {ex.Message}");
+            }
+            
+            // 如果所有检测都失败，默认使用x86_64（Intel Mac的兼容性）
+            UnityEngine.Debug.LogWarning("Could not detect native architecture, falling back to x86_64");
+            return "x86_64";
+        }
+        
+        public void Start()
+        {
+            lock (_stateLock)
+            {
+                if (Running || _isStarting)
+                {
+                    return;
+                }
+
+                _isStarting = true;
+            }
+
+            try
+            {
+                StopHttpListener();
+                _cancellationTokenSource?.Cancel();
+                _cancellationTokenSource = new CancellationTokenSource();
+
+                int port = GetConfiguredPort();
+                if (!TryStartOnPort(port))
+                {
+                    Debug.LogWarning($"MCPService start failed. Could not bind to port {port}.");
+                    lock (_stateLock) { _isStarting = false; }
+                    return;
+                }
+
+                string selectedPrefix = BuildPrefix(port);
+                _currentListenerPrefix = selectedPrefix;
+                SaveEndpointState(port, selectedPrefix);
+                Application.runInBackground = true;
+                Debug.Log($"MCPService listening on {selectedPrefix}");
+
+                Running = true;
+                OnStateChange?.Invoke();
+
+                // Run the listener loop on a ThreadPool thread to avoid
+                // Unity's UnitySynchronizationContext capturing async continuations.
+                // Without this, awaits in the loop would need the main thread to resume,
+                // but the main thread is idle in Editor → deadlock.
+                var cts = _cancellationTokenSource;
+                var listener = HttpListener;
+                Task.Run(() => ListenerLoopAsync(listener, port, cts.Token), cts.Token);
+            }
+            catch (Exception ex) when (IsAddressAlreadyInUse(ex))
+            {
+                Debug.LogWarning($"MCPService start failed. Address already in use for prefix: {_currentListenerPrefix}");
+                CleanupAfterStop();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Failed to start MCPService: {ex}");
+                CleanupAfterStop();
+            }
+        }
+
+        /// <summary>
+        /// Try to bind the HttpListener on the given port.
+        /// If the port is already in use, attempts to kill the zombie listener
+        /// (if it belongs to our own process) and retries once.
+        /// </summary>
+        private bool TryStartOnPort(int port)
+        {
+            try
+            {
+                TryStartHttpListener(port);
+                return true;
+            }
+            catch (Exception ex) when (IsAddressAlreadyInUse(ex))
+            {
+                Debug.Log($"Port {port} in use — attempting to reclaim from zombie listener...");
+                
+                // Check if the endpoint file says this port belongs to our PID (zombie from pre-recompile)
+                try
+                {
+                    string path = GetEndpointStateFilePath();
+                    if (File.Exists(path))
+                    {
+                        string json = File.ReadAllText(path);
+                        var endpoint = JsonConvert.DeserializeObject<MCPPublishedEndpoint>(json);
+                        if (endpoint != null && endpoint.Port == port && endpoint.Pid == Process.GetCurrentProcess().Id)
+                        {
+                            Debug.Log($"Endpoint file confirms port {port} belongs to our PID — waiting briefly for zombie self-termination...");
+                            // The zombie listener checks staleness every 2s. 
+                            // Overwrite the endpoint file with a different port to trigger its self-termination.
+                            SaveEndpointState(0, "");
+                            Thread.Sleep(3000);
+                            
+                            // Retry after zombie should have exited
+                            try
+                            {
+                                TryStartHttpListener(port);
+                                return true;
+                            }
+                            catch (Exception retryEx) when (IsAddressAlreadyInUse(retryEx))
+                            {
+                                Debug.LogWarning($"Port {port} still in use after zombie kill attempt.");
+                            }
+                        }
+                    }
+                }
+                catch (Exception zombieEx)
+                {
+                    Debug.LogWarning($"Zombie reclaim failed: {zombieEx.Message}");
+                }
+                
+                return false;
+            }
+        }
+
+        private const int StalenessCheckIntervalMs = 2000;
+
+        private async Task ListenerLoopAsync(HttpListener listener, int boundPort, CancellationToken token)
+        {
+            try
+            {
+                var lastStalenessCheck = DateTime.UtcNow;
+
+                while (!token.IsCancellationRequested)
+                {
+                    var getContextTask = listener.GetContextAsync();
+                    var completedTask = await Task.WhenAny(
+                        getContextTask,
+                        Task.Delay(StalenessCheckIntervalMs, token)).ConfigureAwait(false);
+
+                    if (token.IsCancellationRequested)
+                        break;
+
+                    if (completedTask == getContextTask)
+                    {
+                        var httpContext = await getContextTask.ConfigureAwait(false);
+                        _ = HandleHttpRequest(httpContext);
+                    }
+
+                    if ((DateTime.UtcNow - lastStalenessCheck).TotalMilliseconds >= StalenessCheckIntervalMs)
+                    {
+                        lastStalenessCheck = DateTime.UtcNow;
+                        if (IsEndpointStale(boundPort))
+                        {
+                            Debug.Log($"MCPService on port {boundPort} detected newer endpoint — self-terminating.");
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (ObjectDisposedException) { }
+            catch (HttpListenerException) { }
+            catch (Exception ex)
+            {
+                Debug.LogError($"MCPService listener loop error: {ex}");
+            }
+            finally
+            {
+                try { listener.Stop(); } catch { }
+                try { listener.Close(); } catch { }
+            }
+        }
+
+        private static bool IsEndpointStale(int boundPort)
+        {
+            try
+            {
+                string path = GetEndpointStateFilePath();
+                if (!File.Exists(path))
+                    return true;
+
+                string json = File.ReadAllText(path);
+                var endpoint = JsonConvert.DeserializeObject<MCPPublishedEndpoint>(json);
+                if (endpoint == null)
+                    return true;
+
+                return endpoint.Port != boundPort;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void CleanupAfterStop()
+        {
+            StopHttpListener();
+            DeleteEndpointState();
+
+            bool shouldNotify;
+            lock (_stateLock)
+            {
+                shouldNotify = Running;
+                Running = false;
+                _isStarting = false;
+            }
+
+            if (shouldNotify)
+            {
+                OnStateChange?.Invoke();
+            }
+        }
+
+        public void Stop()
+        {
+            bool wasRunning;
+            lock (_stateLock)
+            {
+                wasRunning = Running;
+                Running = false;
+                _isStarting = false;
+            }
+
+            _cancellationTokenSource?.Cancel();
+            StopHttpListener();
+            DeleteEndpointState();
+            _cancellationTokenSource?.Dispose();
+            _cancellationTokenSource = null;
+
+            if (wasRunning)
+            {
+                OnStateChange?.Invoke();
+            }
+        }
+
+        private static bool IsAddressAlreadyInUse(Exception ex)
+        {
+            Exception current = ex;
+            while (current != null)
+            {
+                if (current is SocketException socketEx && socketEx.SocketErrorCode == SocketError.AddressAlreadyInUse)
+                {
+                    return true;
+                }
+
+                current = current.InnerException;
+            }
+
+            return false;
+        }
+
+        private bool TryStartHttpListener(int port)
+        {
+            if (port <= 0)
+            {
+                port = DefaultPort;
+            }
+
+            string prefix = BuildPrefix(port);
+            HttpListener tempListener = new HttpListener();
+            tempListener.Prefixes.Add(prefix);
+
+            try
+            {
+                tempListener.Start();
+                HttpListener = tempListener;
+                return true;
+            }
+            catch
+            {
+                try { tempListener.Close(); } catch { }
+                throw;
+            }
+        }
+
+        private static string BuildPrefix(int port)
+        {
+            // Use weak wildcard (*) so that requests with any Host header
+            // (localhost, [::1], 127.0.0.1, etc.) are accepted.
+            // Unlike '+', '*' does not require admin/urlacl on Windows.
+            return $"http://*:{port}/mcp/";
+        }
+
+        private static string GetEndpointStateFilePath()
+        {
+            string projectPath = Path.GetDirectoryName(Application.dataPath);
+            string directoryPath = Path.Combine(projectPath, "Library", EndpointStateFolderName);
+            return Path.Combine(directoryPath, EndpointStateFileName);
+        }
+
+        private static void SaveEndpointState(int port, string prefix)
+        {
+            try
+            {
+                string stateFilePath = GetEndpointStateFilePath();
+                string stateDirectory = Path.GetDirectoryName(stateFilePath);
+                if (!Directory.Exists(stateDirectory))
+                {
+                    Directory.CreateDirectory(stateDirectory);
+                }
+
+                var endpointState = new MCPPublishedEndpoint
+                {
+                    Url = $"http://127.0.0.1:{port}/mcp/",
+                    Port = port,
+                    Pid = Process.GetCurrentProcess().Id,
+                    ProjectPath = Path.GetDirectoryName(Application.dataPath),
+                    UpdatedAtUtc = DateTime.UtcNow.ToString("O")
+                };
+
+                string json = JsonConvert.SerializeObject(endpointState, Formatting.Indented);
+                File.WriteAllText(stateFilePath, json);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to save MCP endpoint state: {ex.Message}");
+            }
+        }
+
+        private static void DeleteEndpointState()
+        {
+            try
+            {
+                string stateFilePath = GetEndpointStateFilePath();
+                if (File.Exists(stateFilePath))
+                {
+                    File.Delete(stateFilePath);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to delete MCP endpoint state: {ex.Message}");
+            }
+        }
+
+        private class MCPPublishedEndpoint
+        {
+            public string Url;
+            public int Port;
+            public int Pid;
+            public string ProjectPath;
+            public string UpdatedAtUtc;
+        }
+
+        private class MCPConfig
+        {
+            public int Port = DefaultPort;
+        }
+
+        private static string GetConfigFilePath()
+        {
+            string projectPath = Path.GetDirectoryName(Application.dataPath);
+            return Path.Combine(projectPath, ConfigFileName);
+        }
+
+        public static int GetConfiguredPort()
+        {
+            try
+            {
+                string path = GetConfigFilePath();
+                if (File.Exists(path))
+                {
+                    string json = File.ReadAllText(path);
+                    var config = JsonConvert.DeserializeObject<MCPConfig>(json);
+                    if (config != null && config.Port > 0 && config.Port <= 65535)
+                        return config.Port;
+                }
+            }
+            catch { }
+            return DefaultPort;
+        }
+
+        public static void SaveConfiguredPort(int port)
+        {
+            try
+            {
+                string path = GetConfigFilePath();
+                string dir = Path.GetDirectoryName(path);
+                if (!Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+                var config = new MCPConfig { Port = port };
+                string json = JsonConvert.SerializeObject(config, Formatting.Indented);
+                File.WriteAllText(path, json);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to save MCP config: {ex.Message}");
+            }
+        }
+
+        private void StopHttpListener()
+        {
+            if (HttpListener == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (HttpListener.IsListening)
+                {
+                    HttpListener.Stop();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Error while stopping HttpListener: {ex.Message}");
+            }
+
+            try
+            {
+                HttpListener.Close();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Error while closing HttpListener: {ex.Message}");
+            }
+            finally
+            {
+                HttpListener = null;
+            }
+        }
+
+        private async Task HandleHttpRequest(HttpListenerContext context)
+        {
+            try
+            {
+                string requestBody;
+                using (var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding))
+                {
+                    requestBody = await reader.ReadToEndAsync().ConfigureAwait(false);
+                }
+
+                MCPResponse response = await ProcessRequestAsync(requestBody).ConfigureAwait(false);
+                string responseContent = JsonConvert.SerializeObject(response, SerializerSettings);
+                
+                context.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+                context.Response.Headers.Add("Access-Control-Allow-Methods", "POST, OPTIONS");
+                context.Response.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
+                
+                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(responseContent);
+                context.Response.ContentLength64 = buffer.Length;
+                context.Response.ContentType = "application/json";
+                await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Error handling HTTP request: {ex.Message}");
+                context.Response.StatusCode = 500;
+            }
+            finally
+            {
+                context.Response.Close();
+            }
+        }
+
+        /// <summary>
+        /// 异步处理请求。工具调用通过 EditorMainThread.RunAsync 在主线程执行。
+        /// </summary>
+        private async Task<MCPResponse> ProcessRequestAsync(string requestBody)
+        {
+            try
+            {
+                MCPRequest request = JsonConvert.DeserializeObject<MCPRequest>(requestBody);
+                if (request == null || string.IsNullOrEmpty(request.method))
+                {
+                    return new MCPResponse { success = false, error = "Invalid request: missing method" };
+                }
+                switch (request.method.ToLower())
+                {
+                    case "listtools":
+                        return MCPResponse.Success(MCPFunctionInvoker.GetTools());
+                    case "calltool":
+                        ToolArgs toolArgs = JsonConvert.DeserializeObject<ToolArgs>(request.params_);
+                        
+                        var parameters = new Dictionary<string, string>();
+                        if (toolArgs.arguments != null)
+                        {
+                            foreach (var prop in toolArgs.arguments.Properties())
+                            {
+                                parameters[prop.Name] = prop.Value?.ToString() ?? "";
+                            }
+                        }
+                        
+                        try
+                        {
+                            object res = await EditorMainThread.RunAsync(
+                                () => MCPFunctionInvoker.InvokeAsync(toolArgs.name, toolArgs.arguments)).ConfigureAwait(false);
+                            string resultStr = res?.ToString() ?? "null";
+                            
+                            AddMCPExecutionHistory(toolArgs.name, parameters, resultStr, true);
+                            
+                            return MCPResponse.Success(res);
+                        }
+                        catch (Exception invokeEx)
+                        {
+                            string fullErrorMessage = invokeEx.ToString();
+                            AddMCPExecutionHistory(toolArgs.name, parameters, fullErrorMessage, false);
+                            return MCPResponse.Error(fullErrorMessage);
+                        }
+                }
+                return MCPResponse.Error($"unknown method:{request.method}");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Error processing request: {ex.Message}");
+                return MCPResponse.Error(ex);
+            }
+        }
+
+        
+        
+        /// <summary>
+        /// 添加MCP工具执行历史记录
+        /// </summary>
+        public static void AddMCPExecutionHistory(string toolName, Dictionary<string, string> parameters, string result, bool success)
+        {
+            AddExecutionHistory(toolName, parameters, result, success, ToolExecutionSource.MCP);
+        }
+        
+        /// <summary>
+        /// 添加执行历史记录（通用方法）
+        /// </summary>
+        public static void AddExecutionHistory(string toolName, Dictionary<string, string> parameters, string result, bool success, ToolExecutionSource source)
+        {
+            var historyItem = new ToolExecutionHistory(toolName, parameters, result, success, source);
+            MCPExecutionHistory.Add(historyItem);
+            
+            // 保持最多50条记录
+            if (MCPExecutionHistory.Count > 50)
+            {
+                MCPExecutionHistory.RemoveAt(0);
+            }
+            
+            // 保存历史记录
+            SaveExecutionHistory();
+            
+            // 通知历史更新（确保在主线程执行，因为 MCP 请求来自后台线程）
+            EditorApplication.delayCall += () => OnHistoryUpdated?.Invoke();
+        }
+        
+        /// <summary>
+        /// 加载执行历史记录
+        /// </summary>
+        private static void LoadExecutionHistory()
+        {
+            try
+            {
+                string historyJson = EditorPrefs.GetString(HistoryPrefKey, "[]");
+                var historyList = JsonConvert.DeserializeObject<List<ToolExecutionHistory>>(historyJson);
+                if (historyList != null)
+                {
+                    MCPExecutionHistory.Clear();
+                    MCPExecutionHistory.AddRange(historyList);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to load MCP execution history: {ex.Message}");
+                MCPExecutionHistory.Clear();
+            }
+        }
+        
+        /// <summary>
+        /// 保存执行历史记录
+        /// </summary>
+        private static void SaveExecutionHistory()
+        {
+            try
+            {
+                string historyJson = JsonConvert.SerializeObject(MCPExecutionHistory, Formatting.None);
+                EditorApplication.delayCall += () =>
+                {
+                    try { EditorPrefs.SetString(HistoryPrefKey, historyJson); }
+                    catch (Exception ex) { Debug.LogWarning($"Failed to save MCP execution history: {ex.Message}"); }
+                };
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to serialize MCP execution history: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// 公开的保存执行历史记录方法
+        /// </summary>
+        public static void SaveExecutionHistoryToPrefs()
+        {
+            SaveExecutionHistory();
+        }
+        
+        /// <summary>
+        /// 设置工具执行状态
+        /// </summary>
+        /// <param name="isExecuting">是否正在执行</param>
+        /// <param name="toolName">工具名称</param>
+        /// <param name="cancellationToken">取消令牌</param>
+        public static void SetToolExecutionState(bool isExecuting, string toolName = null, System.Threading.CancellationToken? cancellationToken = null)
+        {
+            _isToolExecuting = isExecuting;
+            _currentExecutingToolName = isExecuting ? toolName : null;
+            
+            if (isExecuting)
+            {
+                // 如果有新的执行开始，取消之前的执行
+                _toolExecutionCancellationSource?.Cancel();
+                _toolExecutionCancellationSource = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken ?? System.Threading.CancellationToken.None);
+            }
+            else
+            {
+                // 执行结束，清理资源
+                _toolExecutionCancellationSource?.Cancel();
+                _toolExecutionCancellationSource?.Dispose();
+                _toolExecutionCancellationSource = null;
+            }
+            
+            // 通知状态变化
+            OnToolExecutionStateChanged?.Invoke(_isToolExecuting, _currentExecutingToolName);
+        }
+        
+        /// <summary>
+        /// 获取当前执行的取消令牌
+        /// </summary>
+        public static System.Threading.CancellationToken GetCurrentExecutionCancellationToken()
+        {
+            return _toolExecutionCancellationSource?.Token ?? System.Threading.CancellationToken.None;
+        }
+        
+        /// <summary>
+        /// 取消当前工具执行
+        /// </summary>
+        public static void CancelCurrentToolExecution()
+        {
+            if (_isToolExecuting && _toolExecutionCancellationSource != null)
+            {
+                _toolExecutionCancellationSource.Cancel();
+                SetToolExecutionState(false);
+            }
+        }
+    }
+    public class MCPRequest
+    {
+        public string method;
+        [JsonProperty("params")]
+        public string params_;
+    }
+    public class ToolArgs
+    {
+        public string name;
+        public JObject arguments;
+    }
+
+    public class MCPResponse
+    {
+        public bool success;
+        public object result;
+        public string error;
+
+        public static MCPResponse Success(object result)
+        { 
+            return new MCPResponse
+            {
+                success = true,
+                result = result
+            };
+        }
+
+        public static MCPResponse Error(string error)
+        {
+            Debug.Log(error);
+            return new MCPResponse
+            {
+                success = false,
+                error = error
+            };
+        }
+        public static MCPResponse Error(Exception ex) => Error(ex.ToString());
+    }
+}

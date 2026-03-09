@@ -1,5 +1,7 @@
 MCPConsole~/MCPConsole.exe
-MCPConsole~/bin/
-MCPConsole~/obj/
-MCPConsole~/.vs/
+MCPConsole~/bin
+MCPConsole~/obj
+.vs/
+*.meta
+MCPConsole~/MCPConsole
 MCPConsole~/.DS_Store

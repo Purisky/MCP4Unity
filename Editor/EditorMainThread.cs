@@ -1,1 +1,109 @@
-using System;using System.Diagnostics;using System.Runtime.InteropServices;using System.Threading;using System.Threading.Tasks;using UnityEditor;namespace MCP4Unity.Editor{    /// <summary>    /// 从任意线程将工作调度到 Unity 主线程执行。    /// 使用 EditorApplication.delayCall 调度 + Win32 PostMessage(WM_NULL) 唤醒空闲的编辑器消息循环。    /// </summary>    [InitializeOnLoad]    internal static class EditorMainThread    {        private static readonly int MainThreadId;        private static readonly Timer WakeTimer;        private static int PendingCount;        static EditorMainThread()        {            MainThreadId = Thread.CurrentThread.ManagedThreadId;            WakeTimer = new Timer(_ => WakeEditor(), null, Timeout.Infinite, Timeout.Infinite);        }        /// <summary>        /// 在主线程上执行异步函数并返回结果。        /// 如果已在主线程则直接执行；否则通过 EditorApplication.delayCall 调度。        /// </summary>        public static Task<T> RunAsync<T>(Func<Task<T>> asyncFunc, CancellationToken ct = default)        {            if (Thread.CurrentThread.ManagedThreadId == MainThreadId)                return asyncFunc();            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);            Interlocked.Increment(ref PendingCount);            // Start a ~30Hz timer to keep waking the editor while work is pending.            WakeTimer.Change(0, 33);            // Use EditorApplication.delayCall to schedule work on the main thread.            // SynchronizationContext.Post may not drain when the editor is idle,            // but delayCall is processed during the next editor tick, which            // PostMessage(WM_NULL) forces to happen.            EditorApplication.delayCall += () =>            {                if (ct.IsCancellationRequested)                {                    tcs.TrySetCanceled();                    DecrementPending();                    return;                }                try                {                    Task<T> task = asyncFunc();                    task.ContinueWith(t =>                    {                        if (t.IsFaulted)                            tcs.TrySetException(t.Exception!.InnerExceptions);                        else if (t.IsCanceled)                            tcs.TrySetCanceled();                        else                            tcs.TrySetResult(t.Result);                        DecrementPending();                    }, TaskScheduler.Default);                }                catch (Exception ex)                {                    tcs.TrySetException(ex);                    DecrementPending();                }            };            WakeEditor();            return tcs.Task;        }        private static void DecrementPending()        {            if (Interlocked.Decrement(ref PendingCount) == 0)                WakeTimer.Change(Timeout.Infinite, Timeout.Infinite);        }        /// <summary>        /// 在主线程上执行同步函数并返回结果。        /// </summary>        public static Task<T> Run<T>(Func<T> func, CancellationToken ct = default)        {            return RunAsync(() => Task.FromResult(func()), ct);        }#if UNITY_EDITOR_WIN        private const uint WM_NULL = 0x0000;        [DllImport("user32.dll", SetLastError = true)]        private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);        private static void WakeEditor()        {            var hwnd = Process.GetCurrentProcess().MainWindowHandle;            if (hwnd != IntPtr.Zero)                PostMessage(hwnd, WM_NULL, IntPtr.Zero, IntPtr.Zero);        }#else        private static void WakeEditor() { }#endif    }}
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
+using UnityEditor;
+
+namespace MCP4Unity.Editor
+{
+    /// <summary>
+    /// 从任意线程将工作调度到 Unity 主线程执行。
+    /// 使用 EditorApplication.delayCall 调度 + Win32 PostMessage(WM_NULL) 唤醒空闲的编辑器消息循环。
+    /// </summary>
+    [InitializeOnLoad]
+    internal static class EditorMainThread
+    {
+        private static readonly int MainThreadId;
+        private static readonly Timer WakeTimer;
+        private static int PendingCount;
+
+        static EditorMainThread()
+        {
+            MainThreadId = Thread.CurrentThread.ManagedThreadId;
+            WakeTimer = new Timer(_ => WakeEditor(), null, Timeout.Infinite, Timeout.Infinite);
+        }
+
+        /// <summary>
+        /// 在主线程上执行异步函数并返回结果。
+        /// 如果已在主线程则直接执行；否则通过 EditorApplication.delayCall 调度。
+        /// </summary>
+        public static Task<T> RunAsync<T>(Func<Task<T>> asyncFunc, CancellationToken ct = default)
+        {
+            if (Thread.CurrentThread.ManagedThreadId == MainThreadId)
+                return asyncFunc();
+
+            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Interlocked.Increment(ref PendingCount);
+            // Start a ~30Hz timer to keep waking the editor while work is pending.
+            WakeTimer.Change(0, 33);
+
+            // Use EditorApplication.delayCall to schedule work on the main thread.
+            // SynchronizationContext.Post may not drain when the editor is idle,
+            // but delayCall is processed during the next editor tick, which
+            // PostMessage(WM_NULL) forces to happen.
+            EditorApplication.delayCall += () =>
+            {
+                if (ct.IsCancellationRequested)
+                {
+                    tcs.TrySetCanceled();
+                    DecrementPending();
+                    return;
+                }
+
+                try
+                {
+                    Task<T> task = asyncFunc();
+                    task.ContinueWith(t =>
+                    {
+                        if (t.IsFaulted)
+                            tcs.TrySetException(t.Exception!.InnerExceptions);
+                        else if (t.IsCanceled)
+                            tcs.TrySetCanceled();
+                        else
+                            tcs.TrySetResult(t.Result);
+                        DecrementPending();
+                    }, TaskScheduler.Default);
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                    DecrementPending();
+                }
+            };
+
+            WakeEditor();
+            return tcs.Task;
+        }
+
+        private static void DecrementPending()
+        {
+            if (Interlocked.Decrement(ref PendingCount) == 0)
+                WakeTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        }
+
+        /// <summary>
+        /// 在主线程上执行同步函数并返回结果。
+        /// </summary>
+        public static Task<T> Run<T>(Func<T> func, CancellationToken ct = default)
+        {
+            return RunAsync(() => Task.FromResult(func()), ct);
+        }
+
+#if UNITY_EDITOR_WIN
+        private const uint WM_NULL = 0x0000;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        private static void WakeEditor()
+        {
+            var hwnd = Process.GetCurrentProcess().MainWindowHandle;
+            if (hwnd != IntPtr.Zero)
+                PostMessage(hwnd, WM_NULL, IntPtr.Zero, IntPtr.Zero);
+        }
+#else
+        private static void WakeEditor() { }
+#endif
+    }
+}
