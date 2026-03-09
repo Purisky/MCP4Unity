@@ -1,4 +1,5 @@
 ﻿#nullable enable
+using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using System.Net.Sockets;
@@ -253,7 +254,7 @@ namespace MCPConsole
                 string result = await CallUnityMcpServiceAsync("listtools", null!);
                 if (result != null)
                 {
-                    return JsonSerializer.Deserialize<ListToolsResult>(result) ?? new();
+                    return JsonSerializer.Deserialize<ListToolsResult>(result, McpJsonUtilities.DefaultOptions) ?? new();
                 }
             }
             catch (Exception ex)

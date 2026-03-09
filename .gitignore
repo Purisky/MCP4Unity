@@ -1,6 +1,8 @@
 MCPConsole~/MCPConsole.exe
 MCPConsole~/bin
 MCPConsole~/obj
+MCPConsole~/publish_out
+MCPConsole~/publish_temp
 .vs/
 *.meta
 MCPConsole~/MCPConsole

@@ -91,18 +91,53 @@ namespace MCP4Unity.Editor
         
         static MCPService()
         {
+            if (IsAssetImportWorker())
+                return;
+
             // 加载持久化的历史记录
             LoadExecutionHistory();
             
             // 检查MCPConsole.exe是否存在，如果不存在则运行build.bat
             CheckAndBuildMCPConsole();
-            
+
+            // Register domain reload handlers to cleanly stop/restart the listener.
+            // Without this, domain reload kills the Task.Run listener loop but leaves
+            // the HttpListener's native handle bound to the port — creating a zombie
+            // listener that accepts TCP but never responds.
+            AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
+            EditorApplication.quitting += OnBeforeAssemblyReload;
+
             if (EditorPrefs.GetBool("MCP4Unity_Auto_Start", true))
             {
                 Inst.Start();
             }
 
             EditorApplication.delayCall += () => OnStateChange?.Invoke();
+        }
+
+        private static bool IsAssetImportWorker()
+        {
+            var args = Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "-name" && args[i + 1].StartsWith("AssetImport"))
+                    return true;
+            }
+            return false;
+        }
+
+        private static void OnBeforeAssemblyReload()
+        {
+            // Cleanly tear down the HTTP listener before domain reload so the port
+            // is released and the new static ctor can rebind it immediately.
+            try
+            {
+                Inst?.Stop();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"MCPService: Error during pre-reload cleanup: {ex.Message}");
+            }
         }  
         public static void CheckAndBuildMCPConsole()
         {
@@ -366,6 +401,7 @@ namespace MCP4Unity.Editor
                 Debug.Log($"MCPService listening on {selectedPrefix}");
 
                 Running = true;
+                _isStarting = false;
                 OnStateChange?.Invoke();
 
                 // Run the listener loop on a ThreadPool thread to avoid
@@ -446,23 +482,26 @@ namespace MCP4Unity.Editor
 
         private async Task ListenerLoopAsync(HttpListener listener, int boundPort, CancellationToken token)
         {
+            Debug.Log($"MCPService: ListenerLoopAsync started on port {boundPort}, thread={System.Threading.Thread.CurrentThread.ManagedThreadId}");
+            Task<HttpListenerContext> acceptTask = null;
             try
             {
+                acceptTask = listener.GetContextAsync();
                 var lastStalenessCheck = DateTime.UtcNow;
 
                 while (!token.IsCancellationRequested)
                 {
-                    var getContextTask = listener.GetContextAsync();
                     var completedTask = await Task.WhenAny(
-                        getContextTask,
-                        Task.Delay(StalenessCheckIntervalMs, token)).ConfigureAwait(false);
+                        acceptTask,
+                        Task.Delay(200, token)).ConfigureAwait(false);
 
                     if (token.IsCancellationRequested)
                         break;
 
-                    if (completedTask == getContextTask)
+                    if (completedTask == acceptTask)
                     {
-                        var httpContext = await getContextTask.ConfigureAwait(false);
+                        var httpContext = await acceptTask.ConfigureAwait(false);
+                        acceptTask = listener.GetContextAsync();
                         _ = HandleHttpRequest(httpContext);
                     }
 
@@ -486,6 +525,7 @@ namespace MCP4Unity.Editor
             }
             finally
             {
+                Debug.Log($"MCPService: ListenerLoopAsync exiting on port {boundPort}");
                 try { listener.Stop(); } catch { }
                 try { listener.Close(); } catch { }
             }
@@ -741,23 +781,49 @@ namespace MCP4Unity.Editor
             }
         }
 
+        /// <summary>
+        /// 单个请求的最大处理时间（秒）。超时后返回 504 并关闭连接，防止 CLOSE_WAIT 堆积。
+        /// </summary>
+        private const int RequestTimeoutSeconds = 30;
+
+        /// <summary>
+        /// 读取请求体的超时（秒）。独立于处理超时，防止慢客户端阻塞。
+        /// </summary>
+        private const int BodyReadTimeoutSeconds = 10;
+
         private async Task HandleHttpRequest(HttpListenerContext context)
         {
             try
             {
                 string requestBody;
-                using (var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding))
+                var readTask = ReadBodyAsync(context.Request);
+                if (await Task.WhenAny(readTask, Task.Delay(TimeSpan.FromSeconds(BodyReadTimeoutSeconds))).ConfigureAwait(false) != readTask)
                 {
-                    requestBody = await reader.ReadToEndAsync().ConfigureAwait(false);
+                    Debug.LogWarning("MCPService: Body read timed out");
+                    try { context.Response.StatusCode = 408; } catch { }
+                    return;
+                }
+                requestBody = await readTask.ConfigureAwait(false);
+
+                MCPResponse response;
+                var processTask = ProcessRequestAsync(requestBody);
+                if (await Task.WhenAny(processTask, Task.Delay(TimeSpan.FromSeconds(RequestTimeoutSeconds))).ConfigureAwait(false) != processTask)
+                {
+                    Debug.LogWarning($"MCPService: Request processing timed out after {RequestTimeoutSeconds}s");
+                    response = MCPResponse.Error($"Request timed out after {RequestTimeoutSeconds}s");
+                    try { context.Response.StatusCode = 504; } catch { }
+                }
+                else
+                {
+                    response = await processTask.ConfigureAwait(false);
                 }
 
-                MCPResponse response = await ProcessRequestAsync(requestBody).ConfigureAwait(false);
                 string responseContent = JsonConvert.SerializeObject(response, SerializerSettings);
-                
+
                 context.Response.Headers.Add("Access-Control-Allow-Origin", "*");
                 context.Response.Headers.Add("Access-Control-Allow-Methods", "POST, OPTIONS");
                 context.Response.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
-                
+
                 byte[] buffer = System.Text.Encoding.UTF8.GetBytes(responseContent);
                 context.Response.ContentLength64 = buffer.Length;
                 context.Response.ContentType = "application/json";
@@ -765,12 +831,20 @@ namespace MCP4Unity.Editor
             }
             catch (Exception ex)
             {
-                Debug.LogError($"Error handling HTTP request: {ex.Message}");
-                context.Response.StatusCode = 500;
+                Debug.LogError($"MCPService HandleHttpRequest error: {ex.Message}");
+                try { context.Response.StatusCode = 500; } catch { }
             }
             finally
             {
-                context.Response.Close();
+                try { context.Response.Close(); } catch { }
+            }
+        }
+
+        private static async Task<string> ReadBodyAsync(HttpListenerRequest request)
+        {
+            using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
+            {
+                return await reader.ReadToEndAsync().ConfigureAwait(false);
             }
         }
 
