@@ -101,13 +101,14 @@ namespace MCPConsole
             {
                 attempt++;
 
-                // Priority: mcp_endpoint.json (runtime) > mcp_config.json (configured port) > default port
+                // Priority: MCP4UNITY_ENDPOINT env var > mcp_endpoint.json (runtime) > mcp_config.json (configured port) > default port
+                string? fromEnv = Environment.GetEnvironmentVariable("MCP4UNITY_ENDPOINT");
                 string? fromState = LoadUnityMcpUrlFromState();
-                string candidate = fromState ?? BuildFallbackUrl(LoadConfiguredPort());
+                string candidate = fromEnv ?? fromState ?? BuildFallbackUrl(LoadConfiguredPort());
 
                 if (attempt <= 5)
                 {
-                    Console.Error.WriteLine($"[MCP4Unity] attempt={attempt} fromState={fromState ?? "null"} candidate={candidate}");
+                    Console.Error.WriteLine($"[MCP4Unity] attempt={attempt} fromEnv={fromEnv ?? "null"} fromState={fromState ?? "null"} candidate={candidate}");
                 }
 
                 if (await IsEndpointReachable(candidate).ConfigureAwait(false))
