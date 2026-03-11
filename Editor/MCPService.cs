@@ -398,7 +398,7 @@ namespace MCP4Unity.Editor
                 _currentListenerPrefix = selectedPrefix;
                 SaveEndpointState(port, selectedPrefix);
                 Application.runInBackground = true;
-                Debug.Log($"MCPService listening on {selectedPrefix}");
+                //Debug.Log($"MCPService listening on {selectedPrefix}");
 
                 Running = true;
                 _isStarting = false;
@@ -482,7 +482,7 @@ namespace MCP4Unity.Editor
 
         private async Task ListenerLoopAsync(HttpListener listener, int boundPort, CancellationToken token)
         {
-            Debug.Log($"MCPService: ListenerLoopAsync started on port {boundPort}, thread={System.Threading.Thread.CurrentThread.ManagedThreadId}");
+            //Debug.Log($"MCPService: ListenerLoopAsync started on port {boundPort}, thread={System.Threading.Thread.CurrentThread.ManagedThreadId}");
             Task<HttpListenerContext> acceptTask = null;
             try
             {
@@ -525,7 +525,7 @@ namespace MCP4Unity.Editor
             }
             finally
             {
-                Debug.Log($"MCPService: ListenerLoopAsync exiting on port {boundPort}");
+                //Debug.Log($"MCPService: ListenerLoopAsync exiting on port {boundPort}");
                 try { listener.Stop(); } catch { }
                 try { listener.Close(); } catch { }
             }
