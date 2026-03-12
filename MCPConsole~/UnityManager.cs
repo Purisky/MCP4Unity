@@ -11,7 +11,6 @@ namespace MCPConsole
         public class UnityConfig
         {
             public string UnityExePath { get; set; } = "";
-            public string ProjectPath { get; set; } = "";
         }
 
         private static UnityConfig LoadConfig()
@@ -30,36 +29,39 @@ namespace MCPConsole
             return _config;
         }
 
-        public static void SaveConfig(string unityExePath, string projectPath)
+        public static void SaveConfig(string unityExePath)
         {
             _config = new UnityConfig
             {
-                UnityExePath = unityExePath,
-                ProjectPath = projectPath
+                UnityExePath = unityExePath
             };
             var json = JsonSerializer.Serialize(_config, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(ConfigFile, json);
         }
 
+        private static string GetProjectPath()
+        {
+            return Directory.GetCurrentDirectory();
+        }
+
         public static bool IsUnityRunning()
         {
-            var config = LoadConfig();
-            if (string.IsNullOrEmpty(config.ProjectPath)) return false;
-
-            var endpointFile = Path.Combine(config.ProjectPath, "Library", "MCP4Unity", "mcp_endpoint.json");
+            var projectPath = GetProjectPath();
+            var endpointFile = Path.Combine(projectPath, "Library", "MCP4Unity", "mcp_endpoint.json");
             return File.Exists(endpointFile);
         }
 
         public static void StartUnity()
         {
             var config = LoadConfig();
-            if (string.IsNullOrEmpty(config.UnityExePath) || string.IsNullOrEmpty(config.ProjectPath))
+            if (string.IsNullOrEmpty(config.UnityExePath))
                 throw new Exception("Unity path not configured. Use configureunity first.");
 
+            var projectPath = GetProjectPath();
             Process.Start(new ProcessStartInfo
             {
                 FileName = config.UnityExePath,
-                Arguments = $"-projectPath \"{config.ProjectPath}\"",
+                Arguments = $"-projectPath \"{projectPath}\"",
                 UseShellExecute = true
             });
         }
@@ -75,20 +77,16 @@ namespace MCPConsole
 
         public static void DeleteSceneBackups()
         {
-            var config = LoadConfig();
-            if (string.IsNullOrEmpty(config.ProjectPath)) return;
-
-            var backupPath = Path.Combine(config.ProjectPath, "Temp", "__Backupscenes");
+            var projectPath = GetProjectPath();
+            var backupPath = Path.Combine(projectPath, "Temp", "__Backupscenes");
             if (Directory.Exists(backupPath))
                 Directory.Delete(backupPath, true);
         }
 
         public static void DeleteScriptAssemblies()
         {
-            var config = LoadConfig();
-            if (string.IsNullOrEmpty(config.ProjectPath)) return;
-
-            var assemblyPath = Path.Combine(config.ProjectPath, "Library", "ScriptAssemblies");
+            var projectPath = GetProjectPath();
+            var assemblyPath = Path.Combine(projectPath, "Library", "ScriptAssemblies");
             if (Directory.Exists(assemblyPath))
                 Directory.Delete(assemblyPath, true);
         }

@@ -341,8 +341,7 @@ namespace MCPConsole
             {
                 case "configureunity":
                     var unityPath = args?["unityExePath"].GetString() ?? "";
-                    var projectPath = args?["projectPath"].GetString() ?? "";
-                    UnityManager.SaveConfig(unityPath, projectPath);
+                    UnityManager.SaveConfig(unityPath);
                     return $"✅ Unity configured: {unityPath}";
                 
                 case "startunity":

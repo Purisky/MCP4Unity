@@ -76,6 +76,10 @@ namespace MCP4Unity.Editor
 
         private static void DrainQueue()
         {
+            // 编译时暂停 MCP 处理，避免性能冲突
+            if (EditorApplication.isCompiling)
+                return;
+
             if (WorkQueue.IsEmpty)
                 return;
 

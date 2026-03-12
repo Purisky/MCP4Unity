@@ -1432,6 +1432,7 @@ namespace MCP4Unity.Editor
                 // Add to history
                 AddToHistory(toolName, parameterDict, result?.ToString() ?? "null", true);
                 
+
                 Debug.Log($"MCP Tool '{toolName}' executed successfully. Result: {result}");
             }
             catch (System.Exception ex)
