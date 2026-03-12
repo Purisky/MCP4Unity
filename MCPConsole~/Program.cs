@@ -277,7 +277,6 @@ namespace MCPConsole
             {
                 Console.Error.WriteLine($"Calling tool: {toolName}");
 
-                // 验证工具名称
                 if (string.IsNullOrWhiteSpace(toolName))
                 {
                     return new CallToolResult
@@ -287,7 +286,14 @@ namespace MCPConsole
                     };
                 }
 
-                // 调用Unity中的calltool方法执行工具
+                // 本地工具（不需要 Unity 运行）
+                var localResult = HandleLocalTool(toolName, request.Params?.Arguments);
+                if (localResult != null)
+                {
+                    return new CallToolResult { Content = [new TextContentBlock { Text = localResult }] };
+                }
+
+                // Unity 工具
                 var parameters = new
                 {
                     name = toolName,
@@ -306,12 +312,47 @@ namespace MCPConsole
                 {
                     ex = tex.InnerException ?? tex;
                 }
-                // Unity服务返回的业务逻辑错误
                 return new CallToolResult
                 {
                     IsError = true,
                     Content = [new TextContentBlock { Text = $"Tool '{toolName}' execution failed: {ex}" }]
                 };
+            }
+        }
+        
+        static string? HandleLocalTool(string toolName, IDictionary<string, JsonElement>? args)
+        {
+            switch (toolName.ToLower())
+            {
+                case "configureunity":
+                    var unityPath = args?["unityExePath"].GetString() ?? "";
+                    var projectPath = args?["projectPath"].GetString() ?? "";
+                    UnityManager.SaveConfig(unityPath, projectPath);
+                    return $"✅ Unity configured: {unityPath}";
+                
+                case "startunity":
+                    UnityManager.DeleteSceneBackups();
+                    UnityManager.DeleteScriptAssemblies();
+                    UnityManager.StartUnity();
+                    return "✅ Unity starting (cleaned backups & assemblies)...";
+                
+                case "stopunity":
+                    UnityManager.StopUnity();
+                    return "✅ Unity stopped";
+                
+                case "isunityrunning":
+                    return UnityManager.IsUnityRunning() ? "✅ Unity is running" : "❌ Unity is not running";
+                
+                case "deletescenebackups":
+                    UnityManager.DeleteSceneBackups();
+                    return "✅ Scene backups deleted";
+                
+                case "deletescriptassemblies":
+                    UnityManager.DeleteScriptAssemblies();
+                    return "✅ ScriptAssemblies deleted";
+                
+                default:
+                    return null;
             }
         }
         #endregion
