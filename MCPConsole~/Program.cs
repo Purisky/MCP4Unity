@@ -48,42 +48,57 @@ namespace MCPConsole
         static async Task<string> CallUnityMcpServiceAsync(string method, object parameters)
         {
             Console.Error.WriteLine($"[MCP4Unity] CallUnityMcpServiceAsync: method={method}");
-            string unityMcpUrl = await ResolveUnityMcpUrlAsync().ConfigureAwait(false);
-            Console.Error.WriteLine($"[MCP4Unity] Resolved URL: {unityMcpUrl}");
-
-            var request = new
-            {
-                method = method,
-                @params = parameters != null ? JsonSerializer.Serialize(parameters) : null
-            };
-
-            var content = new StringContent(JsonSerializer.Serialize(request), Encoding.UTF8, "application/json");
-            HttpResponseMessage response;
+            
             try
             {
+                string unityMcpUrl = await ResolveUnityMcpUrlAsync().ConfigureAwait(false);
+                Console.Error.WriteLine($"[MCP4Unity] Resolved URL: {unityMcpUrl}");
+
+                var request = new
+                {
+                    method = method,
+                    @params = parameters != null ? JsonSerializer.Serialize(parameters) : null
+                };
+
+                var content = new StringContent(JsonSerializer.Serialize(request), Encoding.UTF8, "application/json");
+                HttpResponseMessage response;
+                
                 response = await _httpClient.PostAsync(unityMcpUrl, content).ConfigureAwait(false);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    _cachedUnityMcpUrl = null;
+                }
+                response.EnsureSuccessStatusCode();
+
+                string responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var mcpResponse = JsonSerializer.Deserialize<McpResponse>(responseBody, JsonOptions) ?? throw new JsonException($"Failed to deserialize MCP response:{responseBody}");
+                if (mcpResponse.Success)
+                {
+                    return mcpResponse.Result.ToString();
+                }
+                else
+                {
+                    throw new Exception($"{mcpResponse.Error}");
+                }
+            }
+            catch (Exception ex) when (ex.Message.Contains("TimeoutException") || ex.Message.Contains("timeout"))
+            {
+                Console.Error.WriteLine($"[MCP4Unity] Unity MCP timeout, attempting auto-recovery...");
+                
+                // Auto-recovery: stop → clean → restart
+                UnityManager.StopUnity();
+                await Task.Delay(2000);
+                UnityManager.DeleteScriptAssemblies();
+                UnityManager.DeleteSceneBackups();
+                UnityManager.StartUnity();
+                
+                throw new Exception("Unity MCP timeout. Auto-recovery initiated: Unity restarted with clean cache. Please retry in 30 seconds.");
             }
             catch
             {
                 _cachedUnityMcpUrl = null;
                 throw;
-            }
-
-            if (!response.IsSuccessStatusCode)
-            {
-                _cachedUnityMcpUrl = null;
-            }
-            response.EnsureSuccessStatusCode();
-
-            string responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var mcpResponse = JsonSerializer.Deserialize<McpResponse>(responseBody, JsonOptions) ?? throw new JsonException($"Failed to deserialize MCP response:{responseBody}");
-            if (mcpResponse.Success)
-            {
-                return mcpResponse.Result.ToString();
-            }
-            else
-            {
-                throw new Exception($"{mcpResponse.Error}");
             }
         }
 
