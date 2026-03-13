@@ -119,11 +119,12 @@ export class UnityManager {
   private isUnityProcessRunning(): boolean {
     try {
       if (process.platform === "win32") {
+        // 使用 tasklist.exe 替代 PowerShell，兼容 Git Bash
         const result = execSync(
-          'powershell -Command "Get-Process Unity -ErrorAction SilentlyContinue | Select-Object -First 1"',
-          { encoding: "utf-8", windowsHide: true, timeout: 5000 }
+          'tasklist.exe /FI "IMAGENAME eq Unity.exe" /NH',
+          { encoding: "utf-8", timeout: 5000 }
         );
-        return result.trim().length > 0;
+        return result.includes("Unity.exe");
       } else {
         execSync("pgrep -x Unity", { encoding: "utf-8", timeout: 5000 });
         return true;
@@ -140,9 +141,10 @@ export class UnityManager {
   private isUnityBatchMode(): boolean {
     try {
       if (process.platform === "win32") {
+        // 使用 wmic 替代 PowerShell，兼容 Git Bash
         const result = execSync(
-          'powershell -Command "Get-Process Unity -ErrorAction SilentlyContinue | Select-Object -ExpandProperty CommandLine"',
-          { encoding: "utf-8", windowsHide: true, timeout: 5000 }
+          'wmic process where "name=\'Unity.exe\'" get commandline /format:list',
+          { encoding: "utf-8", timeout: 5000 }
         );
         return result.includes("-batchmode") || result.includes("-batchMode");
       } else {
@@ -164,11 +166,12 @@ export class UnityManager {
   private isProcessAlive(pid: number): boolean {
     try {
       if (process.platform === "win32") {
+        // 使用 tasklist.exe 替代 PowerShell
         const result = execSync(
-          `powershell -Command "Get-Process -Id ${pid} -ErrorAction SilentlyContinue | Select-Object -First 1"`,
-          { encoding: "utf-8", windowsHide: true, timeout: 5000 }
+          `tasklist.exe /FI "PID eq ${pid}" /NH`,
+          { encoding: "utf-8", timeout: 5000 }
         );
-        return result.trim().length > 0;
+        return result.includes(pid.toString());
       } else {
         execSync(`kill -0 ${pid}`, { timeout: 5000 });
         return true;
@@ -358,21 +361,13 @@ export class UnityManager {
 
     const projectPath = this.getProjectPath();
 
-    // Windows 平台使用 PowerShell Start-Process
+    // 使用 spawn 启动 Unity（跨平台兼容）
     try {
-      if (process.platform === "win32") {
-        const psCommand = `Start-Process "${config.unityExePath}" -ArgumentList "-projectPath", "${projectPath}"`;
-        execSync(`powershell -Command "${psCommand}"`, {
-          windowsHide: true,
-          timeout: 10000,
-        });
-      } else {
-        // macOS/Linux
-        spawn(config.unityExePath, ["-projectPath", projectPath], {
-          detached: true,
-          stdio: "ignore",
-        }).unref();
-      }
+      spawn(config.unityExePath, ["-projectPath", projectPath], {
+        detached: true,
+        stdio: "ignore",
+        shell: false,
+      }).unref();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to start Unity: ${errorMessage}`);
@@ -385,8 +380,8 @@ export class UnityManager {
   stopUnity(): void {
     if (process.platform === "win32") {
       try {
-        execSync("powershell -Command \"Stop-Process -Name Unity -Force\"", {
-          windowsHide: true,
+        // 使用 taskkill.exe 替代 PowerShell
+        execSync("taskkill.exe /F /IM Unity.exe", {
           timeout: 10000,
         });
       } catch (error) {
