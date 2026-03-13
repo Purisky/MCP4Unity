@@ -713,7 +713,7 @@ namespace MCP4Unity.Editor
                     case "listtools":
                         return MCPResponse.Success(MCPFunctionInvoker.GetTools());
                     case "calltool":
-                        ToolArgs toolArgs = JsonConvert.DeserializeObject<ToolArgs>(request.params_);
+                        ToolArgs toolArgs = request.params_?.ToObject<ToolArgs>();
                         
                         var parameters = new Dictionary<string, string>();
                         if (toolArgs.arguments != null)
@@ -885,7 +885,7 @@ namespace MCP4Unity.Editor
     {
         public string method;
         [JsonProperty("params")]
-        public string params_;
+        public JObject params_;
     }
     public class ToolArgs
     {

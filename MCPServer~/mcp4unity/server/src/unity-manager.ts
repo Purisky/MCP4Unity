@@ -121,14 +121,15 @@ export class UnityManager {
       if (process.platform === "win32") {
         const result = execSync(
           'powershell -Command "Get-Process Unity -ErrorAction SilentlyContinue | Select-Object -First 1"',
-          { encoding: "utf-8", windowsHide: true }
+          { encoding: "utf-8", windowsHide: true, timeout: 5000 }
         );
         return result.trim().length > 0;
       } else {
-        execSync("pgrep -x Unity", { encoding: "utf-8" });
+        execSync("pgrep -x Unity", { encoding: "utf-8", timeout: 5000 });
         return true;
       }
     } catch (error) {
+      console.error("[UnityManager] Failed to check Unity process:", error);
       return false;
     }
   }
@@ -141,16 +142,18 @@ export class UnityManager {
       if (process.platform === "win32") {
         const result = execSync(
           'powershell -Command "Get-Process Unity -ErrorAction SilentlyContinue | Select-Object -ExpandProperty CommandLine"',
-          { encoding: "utf-8", windowsHide: true }
+          { encoding: "utf-8", windowsHide: true, timeout: 5000 }
         );
         return result.includes("-batchmode") || result.includes("-batchMode");
       } else {
         const result = execSync("ps aux | grep Unity | grep -i batchmode", {
           encoding: "utf-8",
+          timeout: 5000,
         });
         return result.trim().length > 0;
       }
     } catch (error) {
+      console.error("[UnityManager] Failed to check batch mode:", error);
       return false;
     }
   }
@@ -163,11 +166,11 @@ export class UnityManager {
       if (process.platform === "win32") {
         const result = execSync(
           `powershell -Command "Get-Process -Id ${pid} -ErrorAction SilentlyContinue | Select-Object -First 1"`,
-          { encoding: "utf-8", windowsHide: true }
+          { encoding: "utf-8", windowsHide: true, timeout: 5000 }
         );
         return result.trim().length > 0;
       } else {
-        execSync(`kill -0 ${pid}`);
+        execSync(`kill -0 ${pid}`, { timeout: 5000 });
         return true;
       }
     } catch (error) {
@@ -356,17 +359,23 @@ export class UnityManager {
     const projectPath = this.getProjectPath();
 
     // Windows 平台使用 PowerShell Start-Process
-    if (process.platform === "win32") {
-      const psCommand = `Start-Process "${config.unityExePath}" -ArgumentList "-projectPath", "${projectPath}"`;
-      execSync(`powershell -Command "${psCommand}"`, {
-        windowsHide: true,
-      });
-    } else {
-      // macOS/Linux
-      spawn(config.unityExePath, ["-projectPath", projectPath], {
-        detached: true,
-        stdio: "ignore",
-      }).unref();
+    try {
+      if (process.platform === "win32") {
+        const psCommand = `Start-Process "${config.unityExePath}" -ArgumentList "-projectPath", "${projectPath}"`;
+        execSync(`powershell -Command "${psCommand}"`, {
+          windowsHide: true,
+          timeout: 10000,
+        });
+      } else {
+        // macOS/Linux
+        spawn(config.unityExePath, ["-projectPath", projectPath], {
+          detached: true,
+          stdio: "ignore",
+        }).unref();
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to start Unity: ${errorMessage}`);
     }
   }
 
@@ -378,15 +387,18 @@ export class UnityManager {
       try {
         execSync("powershell -Command \"Stop-Process -Name Unity -Force\"", {
           windowsHide: true,
+          timeout: 10000,
         });
       } catch (error) {
         // 进程可能不存在，忽略错误
+        console.error("[UnityManager] Failed to stop Unity (may not be running):", error);
       }
     } else {
       try {
-        execSync("pkill -9 Unity");
+        execSync("pkill -9 Unity", { timeout: 10000 });
       } catch (error) {
         // 进程可能不存在，忽略错误
+        console.error("[UnityManager] Failed to stop Unity (may not be running):", error);
       }
     }
   }

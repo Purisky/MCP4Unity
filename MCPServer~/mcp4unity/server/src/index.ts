@@ -204,6 +204,18 @@ async function handleManagementTool(
 
 // Start server
 async function main() {
+  // Handle EPIPE errors to prevent crashes when client disconnects
+  process.stdout.on('error', (err) => {
+    if (err.code === 'EPIPE') {
+      console.error('[MCP4Unity] Client disconnected (EPIPE)');
+      process.exit(0);
+    }
+  });
+
+  process.stdin.on('error', (err) => {
+    console.error('[MCP4Unity] stdin error:', err);
+  });
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("[MCP4Unity] Server started");

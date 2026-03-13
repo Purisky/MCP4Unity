@@ -110,6 +110,9 @@ export class UnityClient {
 
       return mcpResponse.result;
     } catch (error) {
+      // 清除缓存 URL，下次重新解析
+      this.cachedUrl = null;
+      
       if (axios.isAxiosError(error)) {
         if (error.code === "ECONNREFUSED") {
           throw new Error(
@@ -121,9 +124,17 @@ export class UnityClient {
             "Unity MCP service timeout. Unity may be busy or frozen."
           );
         }
+        if (error.code === "ECONNRESET") {
+          throw new Error(
+            "Unity connection reset. Unity may have crashed or restarted."
+          );
+        }
         throw new Error(`HTTP error: ${error.message}`);
       }
-      throw error;
+      
+      // 捕获所有其他错误，避免崩溃
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Unity communication failed: ${errorMessage}`);
     }
   }
 
@@ -131,10 +142,16 @@ export class UnityClient {
    * 列出 Unity 侧的所有工具
    */
   async listTools(): Promise<Tool[]> {
-    const result = await this.callUnityMcpService("listtools");
-    const unityTools: UnityToolDefinition[] = JSON.parse(result);
+    try {
+      const result = await this.callUnityMcpService("listtools");
+      const unityTools: UnityToolDefinition[] = JSON.parse(result);
 
-    return unityTools.map((tool) => this.convertUnityToolToMcpTool(tool));
+      return unityTools.map((tool) => this.convertUnityToolToMcpTool(tool));
+    } catch (error) {
+      console.error("[UnityClient] Failed to list tools:", error);
+      // 返回空数组而不是抛出错误，让服务器继续运行
+      return [];
+    }
   }
 
   /**
@@ -144,10 +161,16 @@ export class UnityClient {
     name: string,
     args: Record<string, unknown>
   ): Promise<string> {
-    return await this.callUnityMcpService("calltool", {
-      name,
-      arguments: args,
-    });
+    try {
+      return await this.callUnityMcpService("calltool", {
+        name,
+        arguments: args,
+      });
+    } catch (error) {
+      // 重新抛出错误，但确保错误消息清晰
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to call Unity tool '${name}': ${errorMessage}`);
+    }
   }
 
   /**
