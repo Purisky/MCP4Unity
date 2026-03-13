@@ -126,7 +126,7 @@ runcode("MyNamespace.EditorUtils.RegenerateAllPrefabs")
 
 ## Workflow: Compile and Fix Errors
 
-**Recommended approach** (use `unity-compile-fix` skill for full automation):
+**Recommended approach**:
 
 1. Check Unity status: `getunitystatus`
 2. If `editor_mcp_ready`, trigger compilation: `recompileassemblies`
@@ -134,7 +134,7 @@ runcode("MyNamespace.EditorUtils.RegenerateAllPrefabs")
 4. Repeat steps 2-3 until clean
 5. Optionally verify with `getunityconsolelog(filter="error")`
 
-**Manual approach** (for one-off checks):
+**Basic workflow**:
 
 ```
 recompileassemblies

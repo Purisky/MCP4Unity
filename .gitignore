@@ -7,3 +7,4 @@ MCPConsole~/publish_temp
 *.meta
 MCPConsole~/MCPConsole
 MCPConsole~/.DS_Store
+MCPServer~/mcp4unity/mcp.json

@@ -206,7 +206,7 @@ Operation takes longer than the 25-second timeout.
 
 **For compilation**:
 - Large projects may exceed timeout
-- Use `unity-compile-fix` skill which handles retries
+- Retry the operation or check Unity console for progress
 
 **For custom async tools**:
 - Break long operations into smaller chunks

@@ -50,8 +50,6 @@ getunitystatus →
   └─ batchmode → 等待完成
 ```
 
-**推荐**: 使用 `unity-compile-fix` skill 进行完整的编译修复循环。
-
 ### Unity 卡死处理
 
 ```

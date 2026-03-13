@@ -362,8 +362,17 @@ export class UnityManager {
     const projectPath = this.getProjectPath();
 
     // 使用 spawn 启动 Unity（跨平台兼容）
+    // 添加参数跳过各种阻塞对话框
+    const args = [
+      "-projectPath", projectPath,
+      "-disable-assembly-updater",  // 跳过程序集更新器
+      "-accept-apiupdate",           // 自动接受 API 更新
+      "-silent-crashes",             // 跳过崩溃恢复对话框
+      "-ignoreCompilerErrors"        // 忽略编译错误，跳过 Safe Mode
+    ];
+    
     try {
-      spawn(config.unityExePath, ["-projectPath", projectPath], {
+      spawn(config.unityExePath, args, {
         detached: true,
         stdio: "ignore",
         shell: false,
