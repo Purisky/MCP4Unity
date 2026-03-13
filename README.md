@@ -1,6 +1,6 @@
 # MCP4Unity
 
-- [中文](./README_CN.md)/[English](./README.md)
+- [中文](./README_CN.md) / [English](./README.md)
 
 ## Project Overview
 
@@ -9,81 +9,153 @@ MCP4Unity is a Unity Editor extension that exposes Unity methods as MCP (Model C
 ## Architecture
 
 ```
-AI Agent (stdio) ─► MCPConsole.exe (MCP SDK v1.1.0) ─► HTTP POST ─► Unity Editor (HttpListener)
+AI Agent (stdio) ─► Node.js MCP Server (TypeScript) ─► HTTP POST ─► Unity Editor (MCPService)
 ```
+
+### Components
 
 | Component | Role |
 |-----------|------|
-| **MCPConsole.exe** | Standalone .NET 9.0 console app. Speaks MCP protocol over stdio with the AI agent, translates MCP requests to HTTP calls to Unity. |
-| **MCPService** | Unity Editor-side `[InitializeOnLoad]` singleton. Runs an `HttpListener` on a local port (default 8080, auto-fallback), receives HTTP requests, dispatches tool invocations. |
-| **EditorMainThread** | Thread marshaling layer. `calltool` requests arrive on thread pool threads but most Unity APIs require the main thread. Uses `ConcurrentQueue<Action>` + `EditorApplication.update` to drain work on the main thread. |
-| **MCPFunctionInvoker** | Scans all loaded assemblies for `[Tool]`-attributed static methods, builds the tool registry, and invokes them by name. |
+| **MCP Server (TypeScript)** | Speaks MCP protocol over stdio with AI agent, translates requests to HTTP calls to Unity. Manages Unity process lifecycle. |
+| **MCPService** | Unity Editor-side `[InitializeOnLoad]` singleton. Runs an `HttpListener` on a local port (default 8080, auto-fallback). |
+| **EditorMainThread** | Thread marshaling layer. Uses `ConcurrentQueue<Action>` + `EditorApplication.update` to execute Unity API calls on main thread. |
+| **MCPFunctionInvoker** | Scans assemblies for `[Tool]`-attributed methods, builds tool registry, invokes by name. |
 
 ### Background Stability (Windows)
 
 When Unity Editor is unfocused/minimized, `EditorApplication.update` may not fire frequently. MCP4Unity uses Win32 APIs to wake the editor:
 
 - `PostMessage(WM_NULL)` — nudges the message pump
-- `SetTimer` — injects periodic `WM_TIMER` messages into Unity's message loop
+- `SetTimer` — injects periodic `WM_TIMER` messages
 - `InvalidateRect` — triggers a repaint
 
-A managed `System.Threading.Timer` polls every 200ms while work items are queued, and auto-stops when the queue drains. This ensures tool calls complete in ~100-200ms even when Unity is in the background.
+A managed `System.Threading.Timer` polls every 200ms while work items are queued, ensuring tool calls complete in ~100-200ms even when Unity is in the background.
 
 ### Domain Reload Safety
 
 Unity's domain reload (triggered by script recompilation) destroys all managed state. MCP4Unity handles this via:
 
-- `AssemblyReloadEvents.beforeAssemblyReload` — stops the HTTP listener cleanly before reload
+- `AssemblyReloadEvents.beforeAssemblyReload` — stops HTTP listener before reload
 - `EditorApplication.quitting` — stops on editor exit
-- `[InitializeOnLoad]` static constructor — restarts the service after reload
+- `[InitializeOnLoad]` static constructor — restarts service after reload
 
 ### AssetImportWorker Guard
 
-Unity 6 spawns `AssetImportWorker` child processes with `-batchMode`. The `[InitializeOnLoad]` static constructor detects this via `Environment.GetCommandLineArgs()` and skips service startup in worker processes, preventing port conflicts.
+Unity 6 spawns `AssetImportWorker` child processes with `-batchMode`. The `[InitializeOnLoad]` static constructor detects this and skips service startup in worker processes, preventing port conflicts.
 
 ## Key Features
 
-- Built-in HTTP server with dynamic local port (prefers 8080, auto-fallback when occupied)
-- Automatic scanning and registration of methods with `[Tool]` attribute
+- **Unity process management**: Start/stop/clean Unity from AI agent
+- **Detailed status detection**: Distinguish between not running, batchmode, MCP ready, and MCP unresponsive states
+- **Source-embedded**: All TypeScript code in `MCPServer~/mcp4unity/` — modify and rebuild instantly
+- Built-in HTTP server with dynamic local port (prefers 8080, auto-fallback)
+- Automatic scanning and registration of `[Tool]`-attributed methods
 - Tool management UI: **Window > MCP Service Manager**
 - Auto-start on editor launch
 - Project-isolated endpoint discovery (`Library/MCP4Unity/mcp_endpoint.json`)
-- Supports either startup order (MCPConsole-first or Unity-first)
 - Background stability — tool calls work reliably even when Unity is unfocused
-- Domain reload safe — survives script recompilation without manual restart
+- Domain reload safe — survives script recompilation
 
 ## Requirements
 
+### Unity Side
 - Unity 2021.3 or later (tested on Unity 6 / 6000.3.10f1)
-  - Newtonsoft.Json (com.unity.nuget.newtonsoft-json)
-- .NET 9.0 Runtime (for MCPConsole.exe, unless published self-contained)
+- Newtonsoft.Json (com.unity.nuget.newtonsoft-json)
+
+### MCP Server Side
+- Node.js 18+ (for running the TypeScript MCP server)
+
+## Installation
+
+### For AI Agents
+
+**Automated installation guide**: See [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md) for step-by-step instructions optimized for AI agents.
+
+### For Human Developers
+
+1. **Clone this repository**:
+   ```bash
+   git clone https://github.com/Purisky/MCP4Unity.git
+   ```
+
+2. **Copy to Unity project**:
+   ```bash
+   cp -r MCP4Unity /path/to/YourUnityProject/Assets/
+   ```
+
+3. **Setup MCP Server**:
+   ```bash
+   # Copy skill to your MCP client's skill directory
+   cp -r Assets/MCP4Unity/MCPServer~/mcp4unity /path/to/skills/
+   
+   # Install dependencies
+   cd /path/to/skills/mcp4unity/server
+   npm install
+   npm run build
+   ```
+
+4. **Configure Unity path**:
+   
+   Unity automatically generates `unity_config.json` on first launch. If you need to configure manually:
+   ```
+   configureunity unityExePath="/path/to/Unity.exe"
+   ```
+
+5. **Verify installation**:
+   ```
+   getunitystatus
+   ```
+
+For detailed instructions, troubleshooting, and configuration options, see [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md).
 
 ## Quick Start
 
-1. Copy the `MCP4Unity` folder to `Assets/` in your Unity project (or add as a git submodule)
-
-2. Build MCPConsole:
+### Unity Management Tools
 
 ```bash
-cd Assets/MCP4Unity/MCPConsole~
-build.bat
+# Configure Unity path (first time only)
+configureunity unityExePath="/path/to/Unity.exe"
+
+# Check Unity status
+getunitystatus
+
+# Start Unity
+startunity
+
+# Stop Unity
+stopunity
+
+# Clean Unity cache
+deletescriptassemblies
 ```
 
-This publishes `MCPConsole.exe` to the `MCPConsole~` folder (framework-dependent, requires .NET 9.0 runtime).
+### Unity Status Detection
 
-3. Configure your AI tool's MCP settings:
+`getunitystatus` returns detailed status:
 
-```json
-{
-  "mcpServers": {
-    "mcp4unity": {
-      "command": "<path-to>/Assets/MCP4Unity/MCPConsole~/MCPConsole.exe"
-    }
-  }
-}
+- `not_running`: Unity process not found
+- `batchmode`: Unity running in headless/batchmode (no MCP service)
+- `editor_mcp_ready`: Unity Editor running, MCP service responsive
+- `editor_mcp_unresponsive`: Unity Editor running but MCP not responding (compiling/loading/blocked)
+
+### Unity Tools
+
+```bash
+# Get hierarchy
+gethierarchy
+
+# Get active scene
+getactivescene
+
+# Find assets
+findassets path="Assets/Prefabs"
+
+# Recompile assemblies
+recompileassemblies
+
+# Get Unity console log
+getunityconsolelog filter="error"
 ```
-
-4. Open Unity Editor — MCP4Unity starts automatically. Verify via **Window > MCP Service Manager** or check that `Library/MCP4Unity/mcp_endpoint.json` exists.
 
 ## Development Tools
 
@@ -147,25 +219,87 @@ namespace MCP
 | **Error handling** | Return descriptive error strings. Don't throw exceptions — the MCP bridge serializes the return value directly. |
 | **Location** | Project tools in `Assets/Editor/MCPTools/`. Don't modify `Assets/MCP4Unity/` (submodule). |
 
-## MCPConsole Technical Details
+## TypeScript Server Development
 
-- **SDK**: [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) v1.1.0
-- **Target**: .NET 9.0, single-file publish
-- **Transport**: stdio (MCP protocol) ↔ HTTP (Unity bridge)
-- **Proxy bypass**: `HttpClient` configured with `UseProxy = false` to avoid interference from system HTTP proxies
-- **Endpoint discovery**: Reads `Library/MCP4Unity/mcp_endpoint.json` from the Unity project to find the HTTP port. Falls back to polling if Unity hasn't started yet.
-
-## Building MCPConsole
+### Rebuilding
 
 ```bash
-cd MCPConsole~
-build.bat
+cd Assets/MCP4Unity/MCPServer~/mcp4unity/server
+npm run build
 ```
 
-`build.bat` performs: clean → restore → build (Release) → publish (win-x64, single-file, framework-dependent, ReadyToRun). Output: `MCPConsole~/MCPConsole.exe`.
-
-To publish self-contained (no .NET runtime dependency):
+### Watch Mode
 
 ```bash
-dotnet publish -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:PublishReadyToRun=true -o .
+npm run watch
 ```
+
+Changes take effect immediately after rebuild.
+
+### Adding New Management Tools
+
+Edit `server/src/index.ts`:
+1. Add tool definition to `MANAGEMENT_TOOLS` array
+2. Add handler case in `handleManagementTool()` function
+3. Rebuild
+
+### Project Structure
+
+```
+Assets/MCP4Unity/
+├── Editor/                    # Unity Editor scripts
+│   ├── MCPService.cs         # HTTP listener
+│   ├── MCPFunctionInvoker.cs # Tool registry
+│   └── ...
+├── MCPServer~/
+│   ├── README.md              # TypeScript server documentation
+│   └── mcp4unity/             # MCP server skill
+│       ├── server/            # TypeScript source
+│       ├── mcp.json           # MCP configuration
+│       └── SKILL.md           # Full documentation
+└── README.md                  # This file
+```
+
+## Documentation
+
+- **Full TypeScript Server Documentation**: [MCPServer~/mcp4unity/SKILL.md](./MCPServer~/mcp4unity/SKILL.md)
+- **Unity Tool Authoring**: See "Development Tools" section above
+- **GitHub Repository**: https://github.com/Purisky/MCP4Unity
+
+## Troubleshooting
+
+### Unity not responding
+
+```bash
+# Check detailed status
+getunitystatus
+
+# If unresponsive, restart Unity
+stopunity
+deletescriptassemblies
+startunity
+```
+
+### MCP server not connecting
+
+1. Verify Node.js is installed: `node --version`
+2. Check server build: `cd server && npm run build`
+3. Verify Unity is running: `getunitystatus`
+4. Check Unity console for errors: **Window > MCP Service Manager**
+
+### Port conflicts
+
+Unity auto-fallbacks from port 8080 if occupied. Check `Library/MCP4Unity/mcp_endpoint.json` for the actual port.
+
+## License
+
+MIT License - see LICENSE file for details
+
+## Contributing
+
+Contributions welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Submit a pull request
+
+For bugs and feature requests, open an issue on GitHub.

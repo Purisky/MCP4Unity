@@ -25,7 +25,6 @@ namespace MCP4Unity.Editor
         private bool _isStarting;
 
         public static Action OnStateChange;
-        private const string MCPConsoleFolderName = "Assets/MCP4Unity/MCPConsole~";
         private const string HistoryPrefKey = "MCP4Unity_ExecutionHistory";
         private const string ConfigFileName = "Assets/MCP4Unity/mcp_config.json";
         private const string EndpointStateFolderName = "MCP4Unity";
@@ -55,10 +54,6 @@ namespace MCP4Unity.Editor
                 return GetConfiguredPort();
             }
         }
-        
-        // 跨平台可执行文件名和构建脚本名
-        private static string MCPConsoleExeName => Application.platform == RuntimePlatform.WindowsEditor ? "MCPConsole.exe" : "MCPConsole";
-        private static string BuildScriptName => Application.platform == RuntimePlatform.WindowsEditor ? "build.bat" : "build.sh";
         
         // MCP执行历史记录
         public static List<ToolExecutionHistory> MCPExecutionHistory { get; private set; } = new List<ToolExecutionHistory>();
@@ -97,8 +92,8 @@ namespace MCP4Unity.Editor
             // 加载持久化的历史记录
             LoadExecutionHistory();
             
-            // 检查MCPConsole.exe是否存在，如果不存在则运行build.bat
-            CheckAndBuildMCPConsole();
+            // 自动生成 MCP 服务器配置文件（如果需要）
+            AutoGenerateMCPServerConfig();
 
             // Register domain reload handlers to cleanly stop/restart the listener.
             // Without this, domain reload kills the Task.Run listener loop but leaves
@@ -139,233 +134,86 @@ namespace MCP4Unity.Editor
                 Debug.LogWarning($"MCPService: Error during pre-reload cleanup: {ex.Message}");
             }
         }  
-        public static void CheckAndBuildMCPConsole()
+        
+        /// <summary>
+        /// 自动生成 MCP 服务器配置文件（unity_config.json）
+        /// 仅在首次运行或配置文件不存在时执行
+        /// </summary>
+        private static void AutoGenerateMCPServerConfig()
         {
             try
             {
-                // 获取MCPConsole路径（相对于项目根目录）
+                // 查找 MCPServer~ 目录
                 string projectPath = Path.GetDirectoryName(Application.dataPath);
-                string mcpConsolePath = Path.Combine(projectPath, MCPConsoleFolderName);
-                string mcpConsoleExePath = Path.Combine(mcpConsolePath, MCPConsoleExeName);
-                string buildScriptPath = Path.Combine(mcpConsolePath, BuildScriptName);
+                string mcpServerPath = Path.Combine(projectPath, "Assets", "MCP4Unity", "MCPServer~", "mcp4unity");
                 
-                // 检查文件夹是否存在
-                if (!Directory.Exists(mcpConsolePath))
+                if (!Directory.Exists(mcpServerPath))
                 {
-                    UnityEngine.Debug.LogWarning($"MCPConsole folder not found at: {mcpConsolePath}");
+                    // MCPServer~ 不存在，可能是用户没有安装 MCP 服务器
                     return;
                 }
                 
-                // 检查可执行文件是否存在
-                if (!File.Exists(mcpConsoleExePath))
+                string configPath = Path.Combine(mcpServerPath, "unity_config.json");
+                
+                // 检查配置文件是否已存在且有效
+                if (File.Exists(configPath))
                 {
-                    UnityEngine.Debug.Log($"MCPConsole not found. Running build script...");
-                    
-                    // 检查构建脚本是否存在
-                    if (!File.Exists(buildScriptPath))
+                    try
                     {
-                        UnityEngine.Debug.LogError($"Build script not found at: {buildScriptPath}");
-                        return;
-                    }
-                    
-                    // 运行构建脚本
-                    ProcessStartInfo psi;
-                    if (Application.platform == RuntimePlatform.WindowsEditor)
-                    {
-                        // Windows: 直接执行批处理文件
-                        psi = new ProcessStartInfo
-                        {
-                            FileName = buildScriptPath,
-                            WorkingDirectory = mcpConsolePath,
-                            UseShellExecute = true,
-                            CreateNoWindow = true,
-                            WindowStyle = ProcessWindowStyle.Hidden
-                        };
-                    }
-                    else
-                    {
-                        // macOS/Linux: 使用bash执行shell脚本，设置PATH环境变量
-                        // 检测系统原生架构并强制使用，避免从Unity的x86_64继承错误架构
-                        string nativeArch = GetNativeArchitecture();
-                        Debug.Log($"Detected native architecture: {nativeArch}" );
-                        psi = new ProcessStartInfo
-                        {
-                            FileName = "arch",
-                            Arguments = $"-{nativeArch} /bin/bash \"{buildScriptPath}\"",
-                            WorkingDirectory = mcpConsolePath,
-                            UseShellExecute = false,
-                            CreateNoWindow = true,
-                            RedirectStandardOutput = true,
-                            RedirectStandardError = true
-                        };
+                        string existingContent = File.ReadAllText(configPath);
+                        var existingConfig = JsonConvert.DeserializeObject<Dictionary<string, object>>(existingContent);
                         
-                        // 确保dotnet能被找到
-                        psi.EnvironmentVariables["PATH"] = "/usr/local/share/dotnet:/usr/local/bin:/opt/dotnet:" + 
-                                                          Environment.GetEnvironmentVariable("PATH");
+                        // 如果配置已生成且有效，跳过
+                        if (existingConfig != null && 
+                            existingConfig.ContainsKey("_generated") && 
+                            existingConfig.ContainsKey("unityExePath") &&
+                            !string.IsNullOrEmpty(existingConfig["unityExePath"]?.ToString()))
+                        {
+                            return;
+                        }
                     }
-                    
-                    using (Process process = Process.Start(psi))
+                    catch
                     {
-                        if (process != null)
-                        {
-                            if (!Application.platform.Equals(RuntimePlatform.WindowsEditor))
-                            {
-                                // 对于macOS/Linux，读取输出信息
-                                string output = process.StandardOutput.ReadToEnd();
-                                string error = process.StandardError.ReadToEnd();
-                                
-                                process.WaitForExit();
-                                
-                                if (process.ExitCode != 0)
-                                {
-                                    UnityEngine.Debug.LogError($"Build script failed with exit code {process.ExitCode}");
-                                    if (!string.IsNullOrEmpty(output)) UnityEngine.Debug.Log($"Output: {output}");
-                                    if (!string.IsNullOrEmpty(error)) UnityEngine.Debug.LogError($"Error: {error}");
-                                }
-                                else
-                                {
-                                    UnityEngine.Debug.Log($"Build script completed successfully");
-                                    if (!string.IsNullOrEmpty(output)) UnityEngine.Debug.Log($"Output: {output}");
-                                }
-                            }
-                            else
-                            {
-                                process.WaitForExit();
-                            }
-                            
-                            // 检查编译结果
-                            if (File.Exists(mcpConsoleExePath))
-                            {
-                                UnityEngine.Debug.Log($"MCPConsole successfully built at: {mcpConsoleExePath}");
-                            }
-                            else
-                            {
-                                UnityEngine.Debug.LogError($"Failed to build MCPConsole at: {mcpConsoleExePath}");
-                                // 尝试查找可执行文件的实际位置
-                                string[] possiblePaths = {
-                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", MCPConsoleExeName),
-                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "osx-arm64", MCPConsoleExeName),
-                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "osx-x64", MCPConsoleExeName),
-                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "linux-arm64", MCPConsoleExeName),
-                                    Path.Combine(mcpConsolePath, "bin", "Release", "net9.0", "linux-x64", MCPConsoleExeName)
-                                };
-                                
-                                foreach (string path in possiblePaths)
-                                {
-                                    if (File.Exists(path))
-                                    {
-                                        UnityEngine.Debug.Log($"Found MCPConsole at: {path}");
-                                        // 尝试复制到预期位置
-                                        try
-                                        {
-                                            File.Copy(path, mcpConsoleExePath, true);
-                                            UnityEngine.Debug.Log($"Copied MCPConsole to expected location: {mcpConsoleExePath}");
-                                        }
-                                        catch (Exception copyEx)
-                                        {
-                                            UnityEngine.Debug.LogError($"Failed to copy MCPConsole: {copyEx.Message}");
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        else
-                        {
-                            UnityEngine.Debug.LogError("Failed to start build process");
-                        }
+                        // 配置文件损坏，继续生成新的
                     }
                 }
+                
+                // 生成配置
+                string unityExePath = GetUnityExecutablePath();
+                
+                var config = new
+                {
+                    unityExePath = unityExePath,
+                    projectPath = projectPath,
+                    _generated = true,
+                    _generatedAt = DateTime.UtcNow.ToString("o"),
+                    _platform = Application.platform.ToString()
+                };
+                
+                string json = JsonConvert.SerializeObject(config, Formatting.Indented);
+                File.WriteAllText(configPath, json);
+                
+                Debug.Log($"[MCP4Unity] Auto-generated unity_config.json at: {configPath}");
             }
             catch (Exception ex)
             {
-                UnityEngine.Debug.LogError($"Error checking/building MCPConsole: {ex.Message}");
+                Debug.LogWarning($"[MCP4Unity] Failed to auto-generate unity_config.json: {ex.Message}");
             }
         }
         
         /// <summary>
-        /// 获取系统的原生架构
+        /// 获取 Unity 可执行文件路径（跨平台）
         /// </summary>
-        private static string GetNativeArchitecture()
+        private static string GetUnityExecutablePath()
         {
-            try
+            string unityPath = EditorApplication.applicationPath;
+            
+            if (string.IsNullOrEmpty(unityPath) || !File.Exists(unityPath))
             {
-                // 在macOS上使用sysctl来获取真实的硬件架构，不受当前进程架构影响
-                ProcessStartInfo psi = new ProcessStartInfo
-                {
-                    FileName = "sysctl",
-                    Arguments = "-n hw.optional.arm64",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
-                
-                using (Process process = Process.Start(psi))
-                {
-                    if (process != null)
-                    {
-                        string output = process.StandardOutput.ReadToEnd().Trim();
-                        string error = process.StandardError.ReadToEnd().Trim();
-                        process.WaitForExit();
-                        
-                        // 如果hw.optional.arm64返回1，说明是ARM64硬件
-                        if (output == "1")
-                        {
-                            UnityEngine.Debug.Log("Detected native architecture: arm64");
-                            return "arm64";
-                        }
-                        else
-                        {
-                            UnityEngine.Debug.Log("Detected native architecture: x86_64");
-                            return "x86_64";
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                UnityEngine.Debug.LogWarning($"Failed to detect native architecture using sysctl: {ex.Message}");
+                throw new FileNotFoundException($"Unity executable not found at: {unityPath}");
             }
             
-            // 备用方法：尝试使用arch命令强制检测
-            try
-            {
-                ProcessStartInfo psi = new ProcessStartInfo
-                {
-                    FileName = "arch",
-                    Arguments = "-arm64 uname -m",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
-                
-                using (Process process = Process.Start(psi))
-                {
-                    if (process != null)
-                    {
-                        string output = process.StandardOutput.ReadToEnd().Trim();
-                        string error = process.StandardError.ReadToEnd().Trim();
-                        process.WaitForExit();
-                        
-                        // 如果能成功运行arch -arm64，说明是ARM64硬件
-                        if (process.ExitCode == 0 && output == "arm64")
-                        {
-                            UnityEngine.Debug.Log("Detected native architecture (fallback): arm64");
-                            return "arm64";
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                UnityEngine.Debug.LogWarning($"Failed to detect native architecture using arch: {ex.Message}");
-            }
-            
-            // 如果所有检测都失败，默认使用x86_64（Intel Mac的兼容性）
-            UnityEngine.Debug.LogWarning("Could not detect native architecture, falling back to x86_64");
-            return "x86_64";
+            return unityPath;
         }
         
         public void Start()
