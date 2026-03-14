@@ -10,7 +10,7 @@ Management tools handle Unity Editor process control, configuration, and mainten
 
 **Parameters**:
 - `unityExePath` (required, string): Full path to Unity.exe
-  - Example: `"C:/Program Files/Unity/Hub/Editor/6000.3.10f1/Editor/Unity.exe"`
+  - Example: `"Path/to/Editor/Unity.exe"`
 - `projectPath` (optional, string): Full path to Unity project root
   - Auto-detected from current working directory if omitted
   - Must contain `Assets/` and `Library/` folders
@@ -21,12 +21,12 @@ Management tools handle Unity Editor process control, configuration, and mainten
 
 ```javascript
 // Configure Unity path (project auto-detected)
-configureunity("C:/Program Files/Unity/Hub/Editor/6000.3.10f1/Editor/Unity.exe")
+configureunity("Path/to/Editor/Unity.exe")
 
 // Configure both paths explicitly
 configureunity(
-  "C:/Program Files/Unity/Hub/Editor/6000.3.10f1/Editor/Unity.exe",
-  "E:/Work/Git/MyUnityProject"
+  "Path/to/Editor/Unity.exe",
+  "Path/to/MyUnityProject"
 )
 ```
 
@@ -34,8 +34,8 @@ configureunity(
 ```json
 {
   "success": true,
-  "unityExePath": "C:/Program Files/Unity/Hub/Editor/6000.3.10f1/Editor/Unity.exe",
-  "projectPath": "E:/Work/Git/MyUnityProject",
+  "unityExePath": "Path/to/Editor/Unity.exe",
+  "projectPath": "Path/to/MyUnityProject",
   "configFile": "{SKILL_ROOT}/unity_config.json"
 }
 ```
@@ -66,7 +66,7 @@ configureunity(
 {
   "success": true,
   "pid": 12345,
-  "projectPath": "E:/Work/Git/MyUnityProject",
+  "projectPath": "Path/to/MyUnityProject",
   "cleanupPerformed": {
     "sceneBackups": true,
     "scriptAssemblies": true
@@ -313,8 +313,8 @@ startunity
 **Format**:
 ```json
 {
-  "unityExePath": "C:/Program Files/Unity/Hub/Editor/6000.3.10f1/Editor/Unity.exe",
-  "projectPath": "E:/Work/Git/MyUnityProject"
+  "unityExePath": "Path/to/Editor/Unity.exe",
+  "projectPath": "Path/to/UnityProject"
 }
 ```
 
