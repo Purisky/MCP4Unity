@@ -722,7 +722,7 @@ namespace MCP4Unity.Editor
                                 {
                                     if (projectConfig.mcpPort > 0 && projectConfig.mcpPort <= 65535)
                                     {
-                                        Debug.Log($"[MCPService] Found port {projectConfig.mcpPort} for project '{kvp.Key}' in {multiConfigPath}");
+                                        //Debug.Log($"[MCPService] Found port {projectConfig.mcpPort} for project '{kvp.Key}' in {multiConfigPath}");
                                         return projectConfig.mcpPort;
                                     }
                                 }
