@@ -6,27 +6,37 @@ Management tools handle Unity Editor process control, configuration, and mainten
 
 ### configureunity
 
-**Purpose**: Configure Unity executable path and project path (first-time setup).
+**Purpose**: Configure Unity executable path, project path, and MCP service port (first-time setup).
 
 **Parameters**:
 - `unityExePath` (required, string): Full path to Unity.exe
-  - Example: `"Path/to/Editor/Unity.exe"`
+  - Example: `"path/to/Unity/Editor/Unity.exe"`
 - `projectPath` (optional, string): Full path to Unity project root
   - Auto-detected from current working directory if omitted
-  - Must contain `Assets/` and `Library/` folders
+  - Must contain `Assets/` and `ProjectSettings/` folders
+- `mcpPort` (optional, number): Unity Editor MCP service port
+  - Default: `52429`
+  - Use different ports for multiple Unity projects to avoid conflicts
 
 **Returns**: Configuration status and saved paths.
 
 **Example Usage**:
 
 ```javascript
-// Configure Unity path (project auto-detected)
-configureunity("Path/to/Editor/Unity.exe")
+// Configure Unity path (project auto-detected, default port 52429)
+configureunity("path/to/Unity/Editor/Unity.exe")
 
-// Configure both paths explicitly
+// Configure with explicit project path
 configureunity(
-  "Path/to/Editor/Unity.exe",
-  "Path/to/MyUnityProject"
+  "path/to/Unity/Editor/Unity.exe",
+  "path/to/your/unity/project"
+)
+
+// Configure with custom MCP port (for multiple projects)
+configureunity(
+  "path/to/Unity/Editor/Unity.exe",
+  "path/to/your/unity/project",
+  52430
 )
 ```
 
@@ -34,17 +44,30 @@ configureunity(
 ```json
 {
   "success": true,
-  "unityExePath": "Path/to/Editor/Unity.exe",
-  "projectPath": "Path/to/MyUnityProject",
-  "configFile": "{SKILL_ROOT}/unity_config.json"
+  "unityExePath": "path/to/Unity/Editor/Unity.exe",
+  "projectPath": "path/to/your/unity/project",
+  "mcpPort": 52429,
+  "configFile": "path/to/your/unity/project/unity_config.json"
+}
+```
+
+**Configuration File Format** (`unity_config.json`):
+```json
+{
+  "unityExePath": "path/to/Unity/Editor/Unity.exe",
+  "projectPath": "path/to/your/unity/project",
+  "mcpPort": 52429
 }
 ```
 
 **Usage Notes**:
-- Only needed once per project
-- Configuration saved to `{SKILL_ROOT}/unity_config.json`
-- Project path auto-detection searches upward for Unity project root
+- Only needed once per Unity project
+- Configuration saved to `{UNITY_PROJECT_ROOT}/unity_config.json`
+- Project path auto-detection searches upward from current directory for Unity project root (containing Assets/ and ProjectSettings/)
+- Supports multiple Unity projects with independent configurations
 - Validates Unity.exe exists before saving
+- **Multi-project setup**: Use different `mcpPort` values for each project to avoid port conflicts
+- **Port persistence**: If `mcpPort` is omitted, existing port configuration is preserved
 
 ---
 
@@ -66,7 +89,7 @@ configureunity(
 {
   "success": true,
   "pid": 12345,
-  "projectPath": "Path/to/MyUnityProject",
+  "projectPath": "path/to/your/unity/project",
   "cleanupPerformed": {
     "sceneBackups": true,
     "scriptAssemblies": true
@@ -76,13 +99,14 @@ configureunity(
 
 **Usage Notes**:
 - Requires prior configuration via `configureunity`
+- Unity takes 30-60s to fully start
+- MCP service becomes available after Unity UI loads
+- Use `getunitystatus` to check when ready
 - Cleanup helps prevent stale cache issues
-- Unity takes 30-60s to fully start and load MCP service
-- Use `getunitystatus` to check when MCP is ready
 
 ---
 
-### stopunity
+### runbatchmode
 
 **Purpose**: Force close Unity Editor process.
 
@@ -106,49 +130,40 @@ configureunity(
 
 ---
 
-### isunityrunning
-
-**Purpose**: Quick boolean check if Unity process is running.
-
-**Parameters**: None
-
-**Returns**: Simple boolean status.
-
-**Example Response**:
-```json
-{
-  "running": true
-}
-```
-
-**Usage Notes**:
-- Fast check (no HTTP requests)
-- Only checks if process exists
-- Does not verify MCP service is responsive
-- Use `getunitystatus` for detailed status
-
----
-
 ### getunitystatus
 
-**Purpose**: Get detailed Unity Editor status with diagnostics.
+**Purpose**: Get Unity Editor status with optional detailed diagnostics.
 
-**Parameters**: None
+**Parameters**:
+- `detailed` (optional, boolean): Return detailed JSON diagnostics
+  - `false` (default): Simple status string with emoji
+  - `true`: Full JSON object with all diagnostic fields
 
-**Returns**: Comprehensive status information including:
-- Process running state
-- MCP endpoint file existence
-- MCP service responsiveness
-- Batchmode detection
-- Diagnostic messages
+**Returns**: Status information (format depends on `detailed` parameter).
 
-**Status Values**:
-- `not_running`: Unity process not found
-- `batchmode`: Unity running in headless/batchmode (no MCP service)
-- `editor_mcp_ready`: Unity Editor running, MCP service responsive
-- `editor_mcp_unresponsive`: Unity Editor running but MCP not responding
+**Simple Mode (default)**:
 
-**Example Response** (Ready):
+```
+getunitystatus()
+// or
+getunitystatus(detailed=false)
+```
+
+**Example Responses**:
+```
+❌ Unity is not running
+⚙️ Unity is running in batchmode (headless)
+✅ Unity Editor is running and MCP service is ready
+⚠️ Unity Editor is running but MCP service is unresponsive (may be compiling, loading, or main thread blocked)
+```
+
+**Detailed Mode**:
+
+```
+getunitystatus(detailed=true)
+```
+
+**Example Response**:
 ```json
 {
   "status": "editor_mcp_ready",
@@ -156,29 +171,21 @@ configureunity(
   "processRunning": true,
   "endpointExists": true,
   "mcpResponsive": true,
-  "batchMode": false,
-  "endpoint": "http://localhost:54321"
+  "batchMode": false
 }
 ```
 
-**Example Response** (Unresponsive):
-```json
-{
-  "status": "editor_mcp_unresponsive",
-  "message": "Unity Editor is running but MCP service is not responding (compiling or loading)",
-  "processRunning": true,
-  "endpointExists": true,
-  "mcpResponsive": false,
-  "batchMode": false,
-  "endpoint": "http://localhost:54321"
-}
-```
+**Status Values**:
+- `not_running`: Unity process not found
+- `batchmode`: Unity running in headless/batchmode (no MCP service)
+- `editor_mcp_ready`: Unity Editor running, MCP service responsive
+- `editor_mcp_unresponsive`: Unity Editor running but MCP not responding
 
-**Example Response** (Not Running):
+**Example Response (not running)**:
 ```json
 {
   "status": "not_running",
-  "message": "Unity process not found",
+  "message": "Unity is not running",
   "processRunning": false,
   "endpointExists": false,
   "mcpResponsive": false,
@@ -187,6 +194,8 @@ configureunity(
 ```
 
 **Usage Notes**:
+- **Simple mode**: Quick status check for scripts/automation
+- **Detailed mode**: Debugging, diagnostics, or when you need specific fields
 - Use before calling MCP tools to verify readiness
 - `editor_mcp_unresponsive` is common during:
   - Initial Unity startup (30-60s)
@@ -266,6 +275,43 @@ getunitystatus → editor_mcp_ready
 Ready to use MCP tools
 ```
 
+### Compilation Check Workflow
+
+**Recommended: Use batchmode for compilation checks**
+
+```
+1. stopunity (if Unity is running)
+   ↓
+2. runbatchmode
+   ↓
+3. Check output:
+   ├─ ✅ Success → Done
+   └─ ❌ Failure → Fix first 20 errors
+   ↓
+4. Repeat step 2-3 until compilation succeeds
+```
+
+**Why batchmode is preferred**:
+- No MCP service dependency
+- Token-efficient output (max 20 errors)
+- Faster than Editor mode
+- Iterative error fixing workflow
+- No UI overhead
+
+**When to use Editor mode compilation**:
+- Need to test runtime behavior immediately after compilation
+- Working with Editor-only code that requires Unity Editor context
+- Debugging compilation issues that only occur in Editor mode
+
+**Editor mode workflow** (fallback):
+```
+getunitystatus
+  ├─ editor_mcp_ready → recompileassemblies
+  ├─ editor_mcp_unresponsive → wait or restart
+  ├─ not_running → startunity
+  └─ batchmode → wait for completion
+```
+
 ### Normal Startup
 
 ```
@@ -308,19 +354,22 @@ startunity
 
 ## Configuration File
 
-**Location**: `{SKILL_ROOT}/unity_config.json`
+**Location**: `{UNITY_PROJECT_ROOT}/unity_config.json` (Unity project root directory containing Assets/ and ProjectSettings/)
 
 **Format**:
 ```json
 {
-  "unityExePath": "Path/to/Editor/Unity.exe",
-  "projectPath": "Path/to/UnityProject"
+  "unityExePath": "path/to/Unity/Editor/Unity.exe",
+  "projectPath": "path/to/your/unity/project",
+  "mcpPort": 52429
 }
 ```
 
 **Auto-created by**: `configureunity` tool
 
 **Used by**: All management tools and MCP tools
+
+**Multi-project support**: Each Unity project has its own independent configuration file, allowing multiple Unity projects to coexist with different Unity versions and ports.
 
 ---
 

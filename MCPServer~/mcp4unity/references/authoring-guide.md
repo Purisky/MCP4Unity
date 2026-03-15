@@ -4,13 +4,17 @@ This guide covers how to create custom MCP tools for Unity Editor automation.
 
 ## Overview
 
-Custom tools are C# static methods decorated with `[Tool]` attribute. They live in `Assets/Editor/MCPTools/` and have full access to Unity Editor APIs.
+Custom tools are C# static methods decorated with `[Tool]` attribute. They have full access to Unity Editor APIs.
 
 **Key Points**:
 - Tools are discovered automatically via reflection
-- No modifications to `Assets/MCP4Unity/` (it's a submodule)
+- **Built-in tools**: `Assets/MCP4Unity/Editor/Tools/` (framework defaults)
+- **Custom tools**: `Assets/Editor/MCPTools/` (user extensions)
 - Tools execute on Unity's main thread
 - Return values are JSON-serialized
+
+**Tool Discovery**:
+MCP4Unity scans all assemblies that reference the MCP4Unity assembly, so tools in both locations are automatically discovered.
 
 ---
 

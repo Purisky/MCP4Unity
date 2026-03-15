@@ -29,7 +29,7 @@ const unityManager = new UnityManager();
 const MANAGEMENT_TOOLS: Tool[] = [
   {
     name: "configureunity",
-    description: "Configure Unity paths (first-time setup)",
+    description: "Configure Unity paths and MCP port (first-time setup)",
     inputSchema: {
       type: "object",
       properties: {
@@ -41,13 +41,25 @@ const MANAGEMENT_TOOLS: Tool[] = [
           type: "string",
           description: "Path to Unity project (optional, defaults to current directory)",
         },
+        mcpPort: {
+          type: "number",
+          description: "Unity Editor MCP service port (optional, defaults to 52429)",
+        },
       },
       required: ["unityExePath"],
     },
   },
   {
     name: "startunity",
-    description: "Start Unity (auto-cleans backups & assemblies)",
+    description: "Start Unity Editor (auto-cleans backups & assemblies)",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "runbatchmode",
+    description: "Run Unity in batchmode to compile and check for errors (recommended for compilation checks)",
     inputSchema: {
       type: "object",
       properties: {},
@@ -62,19 +74,16 @@ const MANAGEMENT_TOOLS: Tool[] = [
     },
   },
   {
-    name: "isunityrunning",
-    description: "Check if Unity is running (simple boolean check)",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-  },
-  {
     name: "getunitystatus",
-    description: "Get detailed Unity status (not_running/batchmode/editor_mcp_ready/editor_mcp_unresponsive)",
+    description: "Get Unity status with optional detailed diagnostics (not_running/batchmode/editor_mcp_ready/editor_mcp_unresponsive)",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        detailed: {
+          type: "boolean",
+          description: "Return detailed JSON diagnostics (default: false for simple status string)",
+        },
+      },
     },
   },
   {
@@ -164,9 +173,10 @@ async function handleManagementTool(
   switch (name) {
     case "configureunity": {
       const unityExePath = args.unityExePath as string;
-      const projectPath = (args.projectPath as string | undefined) || process.cwd();
-      unityManager.saveConfig(unityExePath, projectPath);
-      return `✅ Unity configured: ${unityExePath}`;
+      const projectPath = args.projectPath as string | undefined;
+      const mcpPort = args.mcpPort as number | undefined;
+      unityManager.saveConfig(unityExePath, projectPath, mcpPort);
+      return `✅ Unity configured: ${unityExePath}${mcpPort ? ` (MCP port: ${mcpPort})` : ''}`;
     }
 
     case "startunity":
@@ -175,18 +185,32 @@ async function handleManagementTool(
       unityManager.startUnity();
       return "✅ Unity starting (cleaned backups & assemblies)...";
 
+    case "runbatchmode": {
+      const output = unityManager.runBatchMode();
+      return output;
+    }
+
     case "stopunity":
       unityManager.stopUnity();
       return "✅ Unity stopped";
 
-    case "isunityrunning":
-      return unityManager.isUnityRunning()
-        ? "✅ Unity is running"
-        : "❌ Unity is not running";
-
     case "getunitystatus": {
+      const detailed = (args.detailed as boolean) ?? false;
       const status = await unityManager.getUnityStatus();
-      return JSON.stringify(status, null, 2);
+      
+      if (detailed) {
+        return JSON.stringify(status, null, 2);
+      } else {
+        // 简洁输出
+        const statusEmoji = {
+          not_running: "❌",
+          batchmode: "⚙️",
+          editor_mcp_ready: "✅",
+          editor_mcp_unresponsive: "⚠️",
+        }[status.status] || "❓";
+        
+        return `${statusEmoji} ${status.message}`;
+      }
     }
 
     case "deletescenebackups":

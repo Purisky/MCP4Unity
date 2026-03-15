@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 interface UnityConfig {
   unityExePath: string;
   projectPath: string;
+  mcpPort?: number; // Unity Editor MCP 服务端口，默认 52429
 }
 
 export enum UnityStatus {
@@ -30,13 +31,33 @@ export class UnityManager {
   private readonly configFile: string;
 
   constructor() {
-    // ES module: get __dirname equivalent
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
+    // 配置文件放在 Unity 项目根目录
+    // 从当前工作目录向上查找 Unity 项目根目录
+    const unityProjectRoot = this.findUnityProjectRoot(process.cwd());
+    this.configFile = path.join(unityProjectRoot, "unity_config.json");
+  }
+
+  /**
+   * 查找 Unity 项目根目录（包含 Assets/ 和 ProjectSettings/ 的目录）
+   */
+  private findUnityProjectRoot(startPath: string): string {
+    let currentPath = startPath;
     
-    // 配置文件放在 skill 根目录
-    const skillRoot = path.resolve(__dirname, "../..");
-    this.configFile = path.join(skillRoot, "unity_config.json");
+    // 向上查找，直到找到 Unity 项目标志或到达根目录
+    while (currentPath !== path.dirname(currentPath)) {
+      const assetsDir = path.join(currentPath, "Assets");
+      const projectSettingsDir = path.join(currentPath, "ProjectSettings");
+      
+      // 检查是否同时存在 Assets 和 ProjectSettings 目录
+      if (fs.existsSync(assetsDir) && fs.existsSync(projectSettingsDir)) {
+        return currentPath;
+      }
+      
+      currentPath = path.dirname(currentPath);
+    }
+    
+    // 如果没找到 Unity 项目，返回当前工作目录
+    return process.cwd();
   }
 
   /**
@@ -68,17 +89,34 @@ export class UnityManager {
   /**
    * 保存配置
    */
-  saveConfig(unityExePath: string, projectPath?: string): void {
+  saveConfig(unityExePath: string, projectPath?: string, mcpPort?: number): void {
+    const targetProjectPath = projectPath || this.findUnityProjectRoot(process.cwd());
+    
+    // 加载现有配置以保留 mcpPort（如果已存在）
+    const targetConfigFile = path.join(targetProjectPath, "unity_config.json");
+    let existingConfig: Partial<UnityConfig> = {};
+    if (fs.existsSync(targetConfigFile)) {
+      try {
+        existingConfig = JSON.parse(fs.readFileSync(targetConfigFile, "utf-8"));
+      } catch (error) {
+        // 忽略解析错误，使用新配置
+      }
+    }
+    
     this.config = {
       unityExePath,
-      projectPath: projectPath || process.cwd(),
+      projectPath: targetProjectPath,
+      mcpPort: mcpPort ?? existingConfig.mcpPort ?? 52429, // 优先使用传入值，其次现有值，最后默认值
     };
 
     fs.writeFileSync(
-      this.configFile,
+      targetConfigFile,
       JSON.stringify(this.config, null, 2),
       "utf-8"
     );
+    
+    // 更新实例的 configFile 路径
+    (this as any).configFile = targetConfigFile;
   }
 
   /**
@@ -342,13 +380,6 @@ export class UnityManager {
   }
 
   /**
-   * 检查 Unity 是否正在运行（简化版，保持向后兼容）
-   */
-  isUnityRunning(): boolean {
-    return this.mcpEndpointExists();
-  }
-
-  /**
    * 启动 Unity
    */
   startUnity(): void {
@@ -429,5 +460,161 @@ export class UnityManager {
     if (fs.existsSync(assemblyPath)) {
       fs.rmSync(assemblyPath, { recursive: true, force: true });
     }
+  }
+
+  /**
+   * 运行 Unity batchmode 编译
+   * 返回结构化的编译结果
+   */
+  runBatchMode(): string {
+    const config = this.loadConfig();
+    const projectPath = this.getProjectPath();
+
+    if (!config.unityExePath) {
+      throw new Error("Unity path not configured. Run configureunity first.");
+    }
+
+    if (!fs.existsSync(config.unityExePath)) {
+      throw new Error(`Unity executable not found: ${config.unityExePath}`);
+    }
+
+    // 使用项目特定的日志文件路径，避免多项目混杂
+    const logDir = path.join(projectPath, "Logs");
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    
+    const logFile = path.join(logDir, "batchmode_compile.log");
+
+    let exitCode = 0;
+
+    try {
+      execSync(
+        `"${config.unityExePath}" -batchmode -projectPath "${projectPath}" -quit -logFile "${logFile}"`,
+        {
+          encoding: "utf-8",
+          timeout: 180000, // 3 分钟超时
+          stdio: "ignore", // 不捕获 stdout，直接写入文件
+        }
+      );
+    } catch (error: any) {
+      exitCode = error.status || 1;
+      // 编译失败是正常情况，继续读取日志
+    }
+
+    // 读取日志文件
+    let rawOutput = "";
+    if (fs.existsSync(logFile)) {
+      rawOutput = fs.readFileSync(logFile, "utf-8");
+    } else {
+      throw new Error(`Log file not found: ${logFile}`);
+    }
+
+    // 解析编译结果
+    return this.parseBatchModeOutput(rawOutput, exitCode, logFile);
+  }
+
+  /**
+   * 解析 batchmode 输出，提取关键信息
+   */
+  private parseBatchModeOutput(
+    rawOutput: string,
+    exitCode: number,
+    logFilePath: string
+  ): string {
+    const lines = rawOutput.split("\n");
+    
+    // 提取编译错误和警告
+    const errors: Array<{ file: string; line: string; message: string }> = [];
+    const warnings: Array<{ file: string; line: string; message: string }> = [];
+    
+    // 正则匹配编译错误: Assets/...cs(123,45): error CS0246: ...
+    const errorRegex = /^(.+?\.cs)\((\d+),\d+\): error (CS\d+): (.+)$/;
+    const warningRegex = /^(.+?\.cs)\((\d+),\d+\): warning (CS\d+): (.+)$/;
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      
+      // 匹配错误
+      const errorMatch = trimmed.match(errorRegex);
+      if (errorMatch) {
+        errors.push({
+          file: errorMatch[1],
+          line: errorMatch[2],
+          message: `${errorMatch[3]}: ${errorMatch[4]}`,
+        });
+        continue;
+      }
+      
+      // 匹配警告
+      const warningMatch = trimmed.match(warningRegex);
+      if (warningMatch) {
+        warnings.push({
+          file: warningMatch[1],
+          line: warningMatch[2],
+          message: `${warningMatch[3]}: ${warningMatch[4]}`,
+        });
+      }
+    }
+
+    // 构建结构化输出
+    const result = {
+      success: exitCode === 0 && errors.length === 0,
+      exitCode,
+      summary: {
+        totalErrors: errors.length,
+        totalWarnings: warnings.length,
+      },
+      errors: errors.slice(0, 20), // 只返回前 20 条错误
+      warnings: warnings.slice(0, 10), // 只返回前 10 条警告
+      truncated: {
+        errors: errors.length > 20,
+        warnings: warnings.length > 10,
+      },
+      logPath: logFilePath,
+    };
+
+    // 格式化输出
+    let output = "";
+    
+    if (result.success) {
+      output += "✅ 编译成功\n\n";
+    } else {
+      output += "❌ 编译失败\n\n";
+    }
+
+    output += `📊 统计:\n`;
+    output += `  - 错误: ${result.summary.totalErrors}\n`;
+    output += `  - 警告: ${result.summary.totalWarnings}\n`;
+    output += `  - 退出码: ${result.exitCode}\n\n`;
+
+    if (errors.length > 0) {
+      output += `🔴 错误 (显示前 ${Math.min(20, errors.length)} 条):\n\n`;
+      result.errors.forEach((err, idx) => {
+        output += `${idx + 1}. ${err.file}:${err.line}\n`;
+        output += `   ${err.message}\n\n`;
+      });
+      
+      if (result.truncated.errors) {
+        output += `⚠️  还有 ${errors.length - 20} 条错误未显示\n`;
+        output += `   修复上述错误后重新编译以查看剩余错误\n\n`;
+      }
+    }
+
+    if (warnings.length > 0 && warnings.length <= 10) {
+      output += `⚠️  警告 (显示前 ${Math.min(10, warnings.length)} 条):\n\n`;
+      result.warnings.forEach((warn, idx) => {
+        output += `${idx + 1}. ${warn.file}:${warn.line}\n`;
+        output += `   ${warn.message}\n\n`;
+      });
+      
+      if (result.truncated.warnings) {
+        output += `⚠️  还有 ${warnings.length - 10} 条警告未显示\n\n`;
+      }
+    }
+
+    output += `📄 完整日志: ${result.logPath}\n`;
+
+    return output;
   }
 }

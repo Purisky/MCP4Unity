@@ -65,7 +65,7 @@ public class MCPService
 ```
 
 **HTTP Listener**:
-- Runs on `http://127.0.0.1:8080/mcp/` (default port)
+- Runs on `http://127.0.0.1:{mcpPort}/mcp/` (default port: 52429)
 - Listens for POST requests with JSON payloads
 - Two endpoints: `listtools` and `calltool`
 
@@ -203,7 +203,7 @@ static void WakeUnity()
 **Format**:
 ```json
 {
-  "port": 8080,
+  "port": 52429,
   "pid": 12345,
   "timestamp": "2026-03-14T10:30:00Z"
 }
@@ -367,10 +367,12 @@ private const bool DEBUG = true;
 
 **Test HTTP directly**:
 ```bash
-curl --noproxy "*" -X POST http://127.0.0.1:8080/mcp/ \
+curl --noproxy "*" -X POST http://127.0.0.1:52429/mcp/ \
   -H "Content-Type: application/json" \
   -d '{"method":"listtools"}'
 ```
+
+Note: Replace `52429` with your configured port if different.
 
 **Check endpoint file**:
 ```bash

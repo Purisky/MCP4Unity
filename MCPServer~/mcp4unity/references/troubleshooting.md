@@ -24,7 +24,7 @@ Tools timeout or return no response.
 
 4. **Test HTTP connectivity** (manual):
    ```bash
-   curl --noproxy "*" -s -m 5 -X POST http://127.0.0.1:8080/mcp/ \
+   curl --noproxy "*" -s -m 5 -X POST http://127.0.0.1:52429/mcp/ \
      -H "Content-Type: application/json" \
      -d '{"method":"listtools"}'
    ```
@@ -127,25 +127,28 @@ startunity
 MCPService fails to start, Unity Console shows "Address already in use" error.
 
 ### Cause
-Another process is using port 8080 (default MCP port).
+Another process is using the configured MCP port (default 52429).
 
 ### Solution
 
 **Option 1: Kill conflicting process**:
 ```bash
 # Windows
-netstat -ano | findstr :8080
+netstat -ano | findstr :52429
 taskkill /PID <pid> /F
 
 # Linux/Mac
-lsof -i :8080
+lsof -i :52429
 kill -9 <pid>
 ```
 
-**Option 2: Change MCP port** (advanced):
-- Edit `Assets/MCP4Unity/Runtime/MCPService.cs`
-- Change `DefaultPort = 8080` to another port
-- Rebuild Unity project
+**Option 2: Change MCP port**:
+```
+# Configure a different port for this project
+configureunity unityExePath="..." projectPath="..." mcpPort=52430
+```
+
+Then restart Unity to apply the new port configuration.
 
 ---
 
@@ -250,7 +253,7 @@ configureunity("C:/Path/To/Unity.exe")
 **Finding Unity path**:
 - Unity Hub: Preferences → Installs → Show in Explorer
 - Typical paths:
-  - Windows: `C:/Program Files/Unity/Hub/Editor/{version}/Editor/Unity.exe`
+  - Windows: `path/to/Unity/Hub/Editor/{version}/Editor/Unity.exe`
   - Mac: `/Applications/Unity/Hub/Editor/{version}/Unity.app/Contents/MacOS/Unity`
   - Linux: `~/Unity/Hub/Editor/{version}/Editor/Unity`
 
@@ -304,10 +307,12 @@ If issues persist:
 
 3. **Test manually**:
    ```bash
-   curl --noproxy "*" -X POST http://127.0.0.1:8080/mcp/ \
+   curl --noproxy "*" -X POST http://127.0.0.1:52429/mcp/ \
      -H "Content-Type: application/json" \
      -d '{"method":"listtools"}'
    ```
+   
+   Note: Replace `52429` with your configured port if different.
 
 4. **Verify MCP4Unity submodule**:
    ```bash

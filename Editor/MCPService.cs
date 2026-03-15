@@ -26,31 +26,19 @@ namespace MCP4Unity.Editor
 
         public static Action OnStateChange;
         private const string HistoryPrefKey = "MCP4Unity_ExecutionHistory";
-        private const string ConfigFileName = "Assets/MCP4Unity/mcp_config.json";
+        private const string ConfigFileName = "unity_config.json";
         private const string EndpointStateFolderName = "MCP4Unity";
         private const string EndpointStateFileName = "mcp_endpoint.json";
-        private const int DefaultPort = 8080;
+        private const int DefaultPort = 52429;
         private string _currentListenerPrefix = BuildPrefix(DefaultPort);
         
         /// <summary>
-        /// 获取当前监听端口。优先从 mcp_endpoint.json 读取，保证与文件完全一致。
+        /// 获取当前配置的端口号（从 unity_config.json 读取）
         /// </summary>
         public int CurrentPort
         {
             get
             {
-                try
-                {
-                    string path = GetEndpointStateFilePath();
-                    if (File.Exists(path))
-                    {
-                        string json = File.ReadAllText(path);
-                        var endpoint = JsonConvert.DeserializeObject<MCPPublishedEndpoint>(json);
-                        if (endpoint != null && endpoint.Port > 0)
-                            return endpoint.Port;
-                    }
-                }
-                catch { }
                 return GetConfiguredPort();
             }
         }
@@ -550,9 +538,11 @@ namespace MCP4Unity.Editor
             public string UpdatedAtUtc;
         }
 
-        private class MCPConfig
+        private class UnityConfig
         {
-            public int Port = DefaultPort;
+            public string unityExePath;
+            public string projectPath;
+            public int mcpPort = DefaultPort;
         }
 
         private static string GetConfigFilePath()
@@ -565,13 +555,15 @@ namespace MCP4Unity.Editor
         {
             try
             {
-                string path = GetConfigFilePath();
-                if (File.Exists(path))
+                string projectPath = Path.GetDirectoryName(Application.dataPath);
+                string configPath = Path.Combine(projectPath, ConfigFileName);
+                
+                if (File.Exists(configPath))
                 {
-                    string json = File.ReadAllText(path);
-                    var config = JsonConvert.DeserializeObject<MCPConfig>(json);
-                    if (config != null && config.Port > 0 && config.Port <= 65535)
-                        return config.Port;
+                    string json = File.ReadAllText(configPath);
+                    var config = JsonConvert.DeserializeObject<UnityConfig>(json);
+                    if (config != null && config.mcpPort > 0 && config.mcpPort <= 65535)
+                        return config.mcpPort;
                 }
             }
             catch { }
@@ -582,13 +574,41 @@ namespace MCP4Unity.Editor
         {
             try
             {
-                string path = GetConfigFilePath();
-                string dir = Path.GetDirectoryName(path);
-                if (!Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
-                var config = new MCPConfig { Port = port };
+                string projectPath = Path.GetDirectoryName(Application.dataPath);
+                string configPath = Path.Combine(projectPath, ConfigFileName);
+                
+                // 读取现有配置（如果存在）
+                UnityConfig config = null;
+                if (File.Exists(configPath))
+                {
+                    try
+                    {
+                        string existingJson = File.ReadAllText(configPath);
+                        config = JsonConvert.DeserializeObject<UnityConfig>(existingJson);
+                    }
+                    catch
+                    {
+                        // 配置文件损坏，创建新的
+                    }
+                }
+                
+                // 更新或创建配置
+                if (config == null)
+                {
+                    config = new UnityConfig
+                    {
+                        unityExePath = EditorApplication.applicationPath,
+                        projectPath = projectPath,
+                        mcpPort = port
+                    };
+                }
+                else
+                {
+                    config.mcpPort = port;
+                }
+                
                 string json = JsonConvert.SerializeObject(config, Formatting.Indented);
-                File.WriteAllText(path, json);
+                File.WriteAllText(configPath, json);
             }
             catch (Exception ex)
             {
