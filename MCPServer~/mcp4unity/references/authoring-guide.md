@@ -1,113 +1,57 @@
 # Authoring Custom MCP Tools
 
-This guide covers how to create custom MCP tools for Unity Editor automation.
+Create custom Unity Editor automation tools using C# static methods with `[Tool]` attribute.
 
-## Overview
+## Quick Start
 
-Custom tools are C# static methods decorated with `[Tool]` attribute. They have full access to Unity Editor APIs.
+**Locations**:
+- Built-in: `Assets/MCP4Unity/Editor/Tools/`
+- Custom: `Assets/Editor/MCPTools/`
 
-**Key Points**:
-- Tools are discovered automatically via reflection
-- **Built-in tools**: `Assets/MCP4Unity/Editor/Tools/` (framework defaults)
-- **Custom tools**: `Assets/Editor/MCPTools/` (user extensions)
-- Tools execute on Unity's main thread
-- Return values are JSON-serialized
-
-**Tool Discovery**:
-MCP4Unity scans all assemblies that reference the MCP4Unity assembly, so tools in both locations are automatically discovered.
-
----
-
-## Minimal Template
-
+**Template**:
 ```csharp
 using MCP4Unity;
-using UnityEngine;
 using UnityEditor;
 
 namespace MCP
 {
-    public class MyModuleTool
+    public class MyTools
     {
-        [Tool("Brief description of what this tool does")]
-        public static string MyToolName(
-            [Desc("What this parameter is for")] string param1,
-            [Desc("Optional parameter")] int param2 = 0)
+        [Tool("Description")]
+        public static string MyTool([Desc("param info")] string param)
         {
-            // Use any UnityEditor API here
-            return "result string";
+            // Use any UnityEditor API
+            return "result";
         }
     }
 }
 ```
 
-**Tool naming**: MCP tool name = method name lowercased. `GetHierarchy` becomes `gethierarchy`.
+**Tool naming**: Method name lowercased (`GetHierarchy` → `gethierarchy`)
 
 ---
 
-## Method Signature Rules
+## Method Signature
 
-### 1. Access Modifiers
+**Requirements**:
+- Must be `public static`
+- Return: `string`, `string[]`, `Task<string>`, or JSON-serializable type
+- Parameters: primitives, arrays, optional (with defaults)
 
-```csharp
-// CORRECT
-public static string MyTool() { ... }
-
-// WRONG - must be public and static
-private static string MyTool() { ... }
-static string MyTool() { ... }
-public string MyTool() { ... }
-```
-
-### 2. Return Types
-
-Supported return types:
-- `string` - Simple text response
-- `string[]` - Array of strings
-- `Task<string>` - Async operations
-- Any JSON-serializable type (classes, structs, arrays)
-
-```csharp
-// String return
-[Tool("Get scene name")]
-public static string GetSceneName()
-{
-    return SceneManager.GetActiveScene().name;
-}
-
-// JSON object return
-[Tool("Get scene info")]
-public static object GetSceneInfo()
-{
-    return new {
-        name = SceneManager.GetActiveScene().name,
-        path = SceneManager.GetActiveScene().path,
-        isDirty = SceneManager.GetActiveScene().isDirty
-    };
-}
-
-// Array return
-[Tool("List all scenes")]
-public static string[] ListScenes()
-{
-    return EditorBuildSettings.scenes.Select(s => s.path).ToArray();
-}
-```
-
-### 3. Parameters
-
-All parameters must be JSON-deserializable:
-- Primitives: `int`, `float`, `bool`, `string`
-- Arrays: `string[]`, `int[]`
-- Optional parameters: use default values
-
+**Example**:
 ```csharp
 [Tool("Create GameObject")]
 public static string CreateObject(
     [Desc("Object name")] string name,
-    [Desc("Parent path (optional)")] string parent = "")
+    [Desc("Parent path")] string parent = "")
 {
-    // ...
+    var obj = new GameObject(name);
+    if (!string.IsNullOrEmpty(parent))
+    {
+        var parentObj = GameObject.Find(parent);
+        if (parentObj) obj.transform.SetParent(parentObj.transform);
+    }
+    return obj.name;
 }
 ```
 
@@ -116,320 +60,71 @@ public static string CreateObject(
 ## Attributes
 
 ### [Tool] - Required
-
-Marks a method as an MCP tool. Description appears in tool listings.
-
-```csharp
-[Tool("Recompile Unity scripts and return errors")]
-public static string RecompileAssemblies() { ... }
-```
+Marks method as MCP tool. Description shown in listings.
 
 ### [Desc] - Recommended
-
-Describes parameter purpose. Helps AI understand what to pass.
-
-```csharp
-public static string LoadScene(
-    [Desc("Scene path or name")] string scenePathOrName,
-    [Desc("Load mode: Single or Additive")] string mode = "Single")
-{
-    // ...
-}
-```
+Describes parameter purpose for AI.
 
 ### [ParamDropdown] - Optional
-
-Provides enum-like options for a parameter. References a static method returning `string[]`.
-
+Provides enum-like options:
 ```csharp
-public static string[] GetLoadModes()
-{
-    return new[] { "Single", "Additive" };
-}
+public static string[] GetModes() => new[] { "Single", "Additive" };
 
-[Tool("Load a scene")]
+[Tool("Load scene")]
 public static string LoadScene(
-    [Desc("Scene path")] string scenePath,
-    [ParamDropdown("GetLoadModes")][Desc("Load mode")] string mode = "Single")
-{
-    // ...
-}
+    string path,
+    [ParamDropdown("GetModes")] string mode = "Single") { ... }
 ```
 
 ---
 
 ## Async Operations
 
-For long-running operations (compilation, asset import), use `async`/`await` and return `Task<string>`.
-
-### Example: Async Compilation
+For long-running tasks (>1s), use `async`/`await`:
 
 ```csharp
 using System.Threading.Tasks;
 using UnityEditor.Compilation;
 
-[Tool("Recompile and wait for result")]
-public static async Task<string> RecompileAssemblies()
+[Tool("Recompile and wait")]
+public static async Task<string> Recompile()
 {
     var tcs = new TaskCompletionSource<bool>();
-    
-    CompilationPipeline.compilationFinished += OnCompilationFinished;
+    CompilationPipeline.compilationFinished += _ => tcs.SetResult(true);
     CompilationPipeline.RequestScriptCompilation();
-    
     await tcs.Task;
-    
-    CompilationPipeline.compilationFinished -= OnCompilationFinished;
-    
-    // Collect errors
-    var errors = GetCompilationErrors();
-    return Newtonsoft.Json.JsonConvert.SerializeObject(errors);
-    
-    void OnCompilationFinished(object obj)
-    {
-        tcs.TrySetResult(true);
-    }
+    return "Done";
 }
 ```
 
-**Important**: Async tools have a 25-second timeout. If the operation takes longer, it will fail with `TimeoutException`.
+**Timeout**: 25 seconds
 
 ---
 
 ## Error Handling
 
-Return descriptive error strings rather than throwing exceptions.
-
+**Return errors as strings**:
 ```csharp
-[Tool("Load a scene")]
-public static string LoadScene(string scenePath)
+[Tool("Load scene")]
+public static string LoadScene(string path)
 {
-    if (string.IsNullOrEmpty(scenePath))
-    {
-        return "Error: scenePath cannot be empty";
-    }
+    if (!File.Exists(path))
+        return $"Error: Scene not found: {path}";
     
-    if (!File.Exists(scenePath))
-    {
-        return $"Error: Scene not found: {scenePath}";
-    }
-    
-    try
-    {
-        EditorSceneManager.OpenScene(scenePath);
-        return $"Success: Loaded {scenePath}";
-    }
-    catch (Exception ex)
-    {
-        return $"Error: {ex.Message}";
-    }
+    EditorSceneManager.OpenScene(path);
+    return $"Loaded: {path}";
 }
 ```
 
-**Why not throw?** The MCP bridge serializes return values. Exceptions are caught and logged, but returning error strings gives better control over error messages.
-
----
-
-## File Organization
-
-Group related tools in one file named `{Module}Tool.cs`.
-
-**Current modules**:
-- `CodeTool.cs` - Compilation, console logs, code execution
-- `SceneTool.cs` - Scene management, hierarchy inspection
-- `AssetTool.cs` - Asset search, import, info
-- `ComponentTool.cs` - Component inspection, property manipulation
-- `HierarchyTool.cs` - GameObject creation, deletion, parenting
-
-**Example structure**:
-
-```
-Assets/Editor/MCPTools/
-├── CodeTool.cs
-├── SceneTool.cs
-├── AssetTool.cs
-├── ComponentTool.cs
-└── HierarchyTool.cs
-```
-
----
-
-## Full Example: Custom Tool
-
+**For exceptions**:
 ```csharp
-using MCP4Unity;
-using UnityEngine;
-using UnityEditor;
-using System.Linq;
-
-namespace MCP
+try
 {
-    public class PrefabTool
-    {
-        [Tool("Find all prefabs in project")]
-        public static string[] FindAllPrefabs()
-        {
-            var guids = AssetDatabase.FindAssets("t:Prefab");
-            return guids.Select(AssetDatabase.GUIDToAssetPath).ToArray();
-        }
-        
-        [Tool("Get prefab component summary")]
-        public static object GetPrefabInfo(
-            [Desc("Prefab asset path")] string prefabPath)
-        {
-            if (string.IsNullOrEmpty(prefabPath))
-                return new { error = "prefabPath cannot be empty" };
-            
-            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
-            if (prefab == null)
-                return new { error = $"Prefab not found: {prefabPath}" };
-            
-            var components = prefab.GetComponents<Component>()
-                .Select(c => c.GetType().Name)
-                .ToArray();
-            
-            return new {
-                path = prefabPath,
-                name = prefab.name,
-                components = components,
-                childCount = prefab.transform.childCount
-            };
-        }
-        
-        [Tool("Instantiate prefab in scene")]
-        public static string InstantiatePrefab(
-            [Desc("Prefab asset path")] string prefabPath,
-            [Desc("Position (x,y,z)")] string position = "0,0,0")
-        {
-            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
-            if (prefab == null)
-                return $"Error: Prefab not found: {prefabPath}";
-            
-            var pos = ParseVector3(position);
-            var instance = PrefabUtility.InstantiatePrefab(prefab) as GameObject;
-            instance.transform.position = pos;
-            
-            return $"Success: Instantiated {prefab.name} at {pos}";
-        }
-        
-        private static Vector3 ParseVector3(string str)
-        {
-            var parts = str.Split(',');
-            return new Vector3(
-                float.Parse(parts[0]),
-                float.Parse(parts[1]),
-                float.Parse(parts[2])
-            );
-        }
-    }
+    // risky operation
 }
-```
-
----
-
-## Testing Your Tools
-
-### 1. Rebuild TypeScript Server
-
-After adding new tools, rebuild the MCP server:
-
-```bash
-cd {SKILL_ROOT}/server
-npm run build
-```
-
-### 2. Restart Unity
-
-New tools are discovered on Unity startup. Restart Unity to register them.
-
-### 3. Test via MCP
-
-Use the tool from your AI agent:
-
-```javascript
-// List tools (verify your tool appears)
-// Then call it
-findallprefabs()
-getprefabinfo("Assets/Prefabs/Player.prefab")
-```
-
----
-
-## Best Practices
-
-### 1. Keep Tools Focused
-
-Each tool should do one thing well. Don't create mega-tools that do multiple unrelated operations.
-
-```csharp
-// GOOD - focused
-[Tool("Get active scene name")]
-public static string GetSceneName() { ... }
-
-[Tool("Get active scene path")]
-public static string GetScenePath() { ... }
-
-// BAD - too broad
-[Tool("Get scene info and also load another scene and save")]
-public static string DoEverything(...) { ... }
-```
-
-### 2. Use Descriptive Names
-
-Tool names should clearly indicate what they do.
-
-```csharp
-// GOOD
-[Tool("Find all textures in Assets/UI folder")]
-public static string[] FindUITextures() { ... }
-
-// BAD - vague
-[Tool("Find stuff")]
-public static string[] Find() { ... }
-```
-
-### 3. Validate Inputs
-
-Always validate parameters before using them.
-
-```csharp
-[Tool("Delete GameObject")]
-public static string DeleteObject(string name)
+catch (Exception ex)
 {
-    if (string.IsNullOrEmpty(name))
-        return "Error: name cannot be empty";
-    
-    var obj = GameObject.Find(name);
-    if (obj == null)
-        return $"Error: GameObject not found: {name}";
-    
-    Object.DestroyImmediate(obj);
-    return $"Success: Deleted {name}";
-}
-```
-
-### 4. Return Structured Data
-
-For complex results, return JSON objects instead of formatted strings.
-
-```csharp
-// GOOD - structured
-[Tool("Get GameObject info")]
-public static object GetObjectInfo(string name)
-{
-    var obj = GameObject.Find(name);
-    return new {
-        name = obj.name,
-        position = obj.transform.position,
-        components = obj.GetComponents<Component>().Select(c => c.GetType().Name)
-    };
-}
-
-// BAD - string formatting
-[Tool("Get GameObject info")]
-public static string GetObjectInfo(string name)
-{
-    var obj = GameObject.Find(name);
-    return $"Name: {obj.name}\nPosition: {obj.transform.position}\n...";
+    return $"Error: {ex.Message}";
 }
 ```
 
@@ -437,88 +132,158 @@ public static string GetObjectInfo(string name)
 
 ## Common Patterns
 
-### Pattern: Find and Return Paths
-
+### Scene Manipulation
 ```csharp
-[Tool("Find all scripts in project")]
-public static string[] FindAllScripts()
+[Tool("Get active scene")]
+public static string GetActiveScene()
 {
-    var guids = AssetDatabase.FindAssets("t:Script");
+    var scene = SceneManager.GetActiveScene();
+    return JsonConvert.SerializeObject(new {
+        name = scene.name,
+        path = scene.path,
+        isDirty = scene.isDirty
+    });
+}
+```
+
+### Hierarchy Operations
+```csharp
+[Tool("Find GameObject")]
+public static string FindObject([Desc("Object name or path")] string name)
+{
+    var obj = GameObject.Find(name);
+    if (!obj) return $"Error: Not found: {name}";
+    
+    return JsonConvert.SerializeObject(new {
+        name = obj.name,
+        path = GetPath(obj),
+        active = obj.activeSelf
+    });
+}
+
+static string GetPath(GameObject obj)
+{
+    var path = obj.name;
+    while (obj.transform.parent)
+    {
+        obj = obj.transform.parent.gameObject;
+        path = obj.name + "/" + path;
+    }
+    return path;
+}
+```
+
+### Component Access
+```csharp
+[Tool("Get component")]
+public static string GetComponent(
+    [Desc("GameObject path")] string path,
+    [Desc("Component type")] string typeName)
+{
+    var obj = GameObject.Find(path);
+    if (!obj) return $"Error: GameObject not found: {path}";
+    
+    var type = Type.GetType(typeName);
+    if (type == null) return $"Error: Type not found: {typeName}";
+    
+    var comp = obj.GetComponent(type);
+    if (!comp) return $"Error: Component not found: {typeName}";
+    
+    return JsonConvert.SerializeObject(comp);
+}
+```
+
+### Asset Operations
+```csharp
+[Tool("Find assets")]
+public static string[] FindAssets(
+    [Desc("Search filter")] string filter,
+    [Desc("Folder path")] string folder = "Assets")
+{
+    var guids = AssetDatabase.FindAssets(filter, new[] { folder });
     return guids.Select(AssetDatabase.GUIDToAssetPath).ToArray();
 }
 ```
 
-### Pattern: Get Detailed Info
+---
 
+## Execution Context
+
+**Main Thread**: All tools execute on Unity's main thread via `EditorMainThread` queue.
+
+**Domain Reload**: Tools survive script recompilation. Service auto-restarts.
+
+**Background Stability**: Tools work reliably even when Unity is unfocused (Win32 message pump keeps editor responsive).
+
+---
+
+## Testing
+
+### Manual Test
+Create test script in `Assets/Editor/`:
 ```csharp
-[Tool("Get asset detailed info")]
-public static object GetAssetInfo(string assetPath)
+using UnityEditor;
+
+public class TestMyTool
 {
-    var asset = AssetDatabase.LoadAssetAtPath<Object>(assetPath);
-    return new {
-        path = assetPath,
-        type = asset.GetType().Name,
-        guid = AssetDatabase.AssetPathToGUID(assetPath),
-        size = new FileInfo(assetPath).Length
-    };
+    [MenuItem("Tools/Test My Tool")]
+    static void Test()
+    {
+        var result = MyTools.MyTool("test");
+        Debug.Log(result);
+    }
 }
 ```
 
-### Pattern: Modify and Confirm
-
-```csharp
-[Tool("Set GameObject active state")]
-public static string SetActive(string name, bool active)
-{
-    var obj = GameObject.Find(name);
-    if (obj == null)
-        return $"Error: GameObject not found: {name}";
-    
-    obj.SetActive(active);
-    return $"Success: Set {name} active={active}";
-}
-```
+### Via MCP
+1. Restart Unity (tools auto-discovered)
+2. Use `listtools` to verify tool appears
+3. Call tool via MCP client
 
 ---
 
 ## Troubleshooting
 
-### Tool Not Appearing
+**Tool not appearing**:
+- Check `public static` modifiers
+- Verify `[Tool]` attribute present
+- Restart Unity
 
-1. Check method is `public static`
-2. Check `[Tool]` attribute is present
-3. Rebuild TypeScript server: `npm run build`
-4. Restart Unity
+**Tool times out**:
+- Use `async`/`await` for long operations
+- Check 25s timeout sufficient
+- Verify not blocking main thread
 
-### Tool Times Out
+**Wrong data returned**:
+- Add `Debug.Log()` statements
+- Check Unity Console for errors
+- Verify JSON-serializable return type
 
-1. Check if operation is blocking main thread
-2. Use `async`/`await` for long operations
-3. Verify 25s timeout is sufficient
-4. Check Unity Console for errors
+---
 
-### Tool Returns Wrong Data
+## Best Practices
 
-1. Add debug logging: `Debug.Log(...)`
-2. Check Unity Console for errors
-3. Verify return type is JSON-serializable
-4. Test tool manually in Unity (create test script)
+1. **Keep tools focused**: One tool = one operation
+2. **Validate inputs**: Check nulls, paths, types
+3. **Return structured data**: Use JSON objects, not plain strings
+4. **Handle errors gracefully**: Return error messages, don't throw
+5. **Document parameters**: Use `[Desc]` for all parameters
+6. **Test thoroughly**: Manual + MCP testing before deployment
 
 ---
 
 ## Advanced: Custom Serialization
 
-For complex types, implement custom JSON serialization:
-
+For complex types:
 ```csharp
 using Newtonsoft.Json;
 
 [Tool("Get complex data")]
-public static string GetComplexData()
+public static string GetData()
 {
     var data = new MyComplexType { ... };
-    return JsonConvert.SerializeObject(data);
+    return JsonConvert.SerializeObject(data, Formatting.Indented);
 }
 ```
 
-**Note**: MCP4Unity uses Newtonsoft.Json for all JSON serialization. Return values are automatically serialized using `JsonConvert.SerializeObject()`.
+MCP4Unity uses Newtonsoft.Json for all serialization.

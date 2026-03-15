@@ -1,169 +1,118 @@
 # Management Tools Reference
 
-Management tools handle Unity Editor process control, configuration, and maintenance tasks. These tools work even when Unity is not running.
+Unity Editor process control and maintenance. Work without Unity running.
 
-## Available Tools
+## startunity
 
-### configureunity
-
-**Purpose**: Configure Unity executable path, project path, and MCP service port (first-time setup).
+Start Unity Editor with automatic cleanup.
 
 **Parameters**:
-- `unityExePath` (required, string): Full path to Unity.exe
-  - Example: `"path/to/Unity/Editor/Unity.exe"`
-- `projectPath` (optional, string): Full path to Unity project root
-  - Auto-detected from current working directory if omitted
-  - Must contain `Assets/` and `ProjectSettings/` folders
-- `mcpPort` (optional, number): Unity Editor MCP service port
-  - Default: `52429`
-  - Use different ports for multiple Unity projects to avoid conflicts
+- `projectPath` (optional, string): Project name or path (uses `defaultProject` if omitted)
 
-**Returns**: Configuration status and saved paths.
+**Returns**: Process start status
 
-**Example Usage**:
-
-```javascript
-// Configure Unity path (project auto-detected, default port 52429)
-configureunity("path/to/Unity/Editor/Unity.exe")
-
-// Configure with explicit project path
-configureunity(
-  "path/to/Unity/Editor/Unity.exe",
-  "path/to/your/unity/project"
-)
-
-// Configure with custom MCP port (for multiple projects)
-configureunity(
-  "path/to/Unity/Editor/Unity.exe",
-  "path/to/your/unity/project",
-  52430
-)
-```
-
-**Example Response**:
-```json
-{
-  "success": true,
-  "unityExePath": "path/to/Unity/Editor/Unity.exe",
-  "projectPath": "path/to/your/unity/project",
-  "mcpPort": 52429,
-  "configFile": "path/to/your/unity/project/unity_config.json"
-}
-```
-
-**Configuration File Format** (`unity_config.json`):
-```json
-{
-  "unityExePath": "path/to/Unity/Editor/Unity.exe",
-  "projectPath": "path/to/your/unity/project",
-  "mcpPort": 52429
-}
-```
-
-**Usage Notes**:
-- Only needed once per Unity project
-- Configuration saved to `{UNITY_PROJECT_ROOT}/unity_config.json`
-- Project path auto-detection searches upward from current directory for Unity project root (containing Assets/ and ProjectSettings/)
-- Supports multiple Unity projects with independent configurations
-- Validates Unity.exe exists before saving
-- **Multi-project setup**: Use different `mcpPort` values for each project to avoid port conflicts
-- **Port persistence**: If `mcpPort` is omitted, existing port configuration is preserved
-
----
-
-### startunity
-
-**Purpose**: Start Unity Editor with automatic cleanup.
-
-**Parameters**: None
-
-**Returns**: Process start status and PID.
-
-**Automatic Cleanup** (before starting):
-1. Deletes scene backup files (`*.backup`)
+**Automatic Cleanup**:
+1. Deletes scene backups (`*.backup`)
 2. Deletes ScriptAssemblies cache
-3. Starts Unity Editor in normal mode (not batchmode)
+3. Starts Unity in normal mode
 
-**Example Response**:
-```json
-{
-  "success": true,
-  "pid": 12345,
-  "projectPath": "path/to/your/unity/project",
-  "cleanupPerformed": {
-    "sceneBackups": true,
-    "scriptAssemblies": true
-  }
-}
-```
-
-**Usage Notes**:
-- Requires prior configuration via `configureunity`
-- Unity takes 30-60s to fully start
-- MCP service becomes available after Unity UI loads
-- Use `getunitystatus` to check when ready
-- Cleanup helps prevent stale cache issues
+**Notes**:
+- Requires `unity_config.json`
+- Takes 30-60s to start
+- Use `getunitystatus` to check readiness
 
 ---
 
-### runbatchmode
+## stopunity
 
-**Purpose**: Force close Unity Editor process.
+Force close Unity Editor.
 
 **Parameters**: None
 
-**Returns**: Success status.
-
-**Example Response**:
+**Returns**:
 ```json
-{
-  "success": true,
-  "message": "Unity process terminated"
-}
+{"success": true, "message": "Unity process terminated"}
 ```
 
-**Usage Notes**:
-- Kills Unity process immediately (no graceful shutdown)
-- Unsaved changes will be lost
-- Use when Unity is frozen or unresponsive
-- Safe to call even if Unity is not running
+**Notes**:
+- Kills immediately (no graceful shutdown)
+- Unsaved changes lost
+- Use when frozen/unresponsive
+- Safe if Unity not running
 
 ---
 
-### getunitystatus
+## runbatchmode
 
-**Purpose**: Get Unity Editor status with optional detailed diagnostics.
+Run Unity in batchmode for compilation check.
 
 **Parameters**:
-- `detailed` (optional, boolean): Return detailed JSON diagnostics
-  - `false` (default): Simple status string with emoji
-  - `true`: Full JSON object with all diagnostic fields
+- `projectPath` (optional, string): Project name or path
 
-**Returns**: Status information (format depends on `detailed` parameter).
+**Returns**: Structured compilation result
+
+**Example Success**:
+```json
+{
+  "success": true,
+  "errors": 0,
+  "warnings": 2,
+  "exitCode": 0,
+  "logPath": "E:\\Project\\Logs\\batchmode_compile.log"
+}
+```
+
+**Example Failure**:
+```json
+{
+  "success": false,
+  "errors": 3,
+  "warnings": 1,
+  "exitCode": 1,
+  "errorDetails": [
+    {
+      "file": "Assets/Scripts/Player.cs",
+      "line": 42,
+      "message": "CS0103: The name 'foo' does not exist"
+    }
+  ],
+  "logPath": "E:\\Project\\Logs\\batchmode_compile.log"
+}
+```
+
+**Notes**:
+- Stops Unity if running
+- Returns first 20 errors
+- More reliable than Editor mode compilation
+- Use for CI/CD or automated checks
+
+---
+
+## getunitystatus
+
+Check Unity Editor status.
+
+**Parameters**:
+- `projectPath` (optional, string): Project name or path
+- `detailed` (optional, boolean): Return JSON diagnostics (default: false)
 
 **Simple Mode (default)**:
-
 ```
 getunitystatus()
-// or
-getunitystatus(detailed=false)
 ```
 
-**Example Responses**:
-```
-❌ Unity is not running
-⚙️ Unity is running in batchmode (headless)
-✅ Unity Editor is running and MCP service is ready
-⚠️ Unity Editor is running but MCP service is unresponsive (may be compiling, loading, or main thread blocked)
-```
+Returns:
+- `❌ Unity is not running`
+- `⚙️ Unity is running in batchmode`
+- `✅ Unity Editor is running and MCP service is ready`
+- `⚠️ Unity Editor is running but MCP service is unresponsive`
 
 **Detailed Mode**:
-
 ```
 getunitystatus(detailed=true)
 ```
 
-**Example Response**:
+Returns:
 ```json
 {
   "status": "editor_mcp_ready",
@@ -176,223 +125,161 @@ getunitystatus(detailed=true)
 ```
 
 **Status Values**:
-- `not_running`: Unity process not found
-- `batchmode`: Unity running in headless/batchmode (no MCP service)
-- `editor_mcp_ready`: Unity Editor running, MCP service responsive
-- `editor_mcp_unresponsive`: Unity Editor running but MCP not responding
+- `not_running` - Unity not running
+- `batchmode` - Headless mode (no MCP)
+- `editor_mcp_ready` - Editor + MCP ready
+- `editor_mcp_unresponsive` - Editor running, MCP not responding
 
-**Example Response (not running)**:
-```json
-{
-  "status": "not_running",
-  "message": "Unity is not running",
-  "processRunning": false,
-  "endpointExists": false,
-  "mcpResponsive": false,
-  "batchMode": false
-}
-```
-
-**Usage Notes**:
-- **Simple mode**: Quick status check for scripts/automation
-- **Detailed mode**: Debugging, diagnostics, or when you need specific fields
-- Use before calling MCP tools to verify readiness
-- `editor_mcp_unresponsive` is common during:
-  - Initial Unity startup (30-60s)
-  - Script compilation
-  - Asset import
-  - Domain reload
-- Validates endpoint file PID matches running process (detects stale files)
+**Use Cases**:
+- Check before calling MCP tools
+- Detect compilation/loading issues
+- Distinguish batchmode vs editor
+- Verify endpoint file validity
 
 ---
 
-### deletescenebackups
+## deletescenebackups
 
-**Purpose**: Delete Unity scene recovery backup files.
+Delete scene backup files.
 
-**Parameters**: None
+**Parameters**:
+- `projectPath` (optional, string): Project name or path
 
-**Returns**: Number of files deleted.
+**Returns**: Success status
 
-**Example Response**:
-```json
-{
-  "success": true,
-  "filesDeleted": 1,
-  "path": "Temp/__Backupscenes"
-}
-```
+**What it deletes**:
+- `Temp/__Backupscenes/*.backup`
 
-**Usage Notes**:
-- Deletes the entire `Temp/__Backupscenes` directory
-- Unity automatically recreates this folder as needed
+**Notes**:
 - Safe to run anytime
-- Useful for cleanup before commits
+- Frees disk space
+- Unity auto-creates backups
 
 ---
 
-### deletescriptassemblies
+## deletescriptassemblies
 
-**Purpose**: Delete Unity's ScriptAssemblies cache folder.
+Delete script compilation cache.
 
-**Parameters**: None
+**Parameters**:
+- `projectPath` (optional, string): Project name or path
 
-**Returns**: Success status.
+**Returns**: Success status
 
-**Example Response**:
-```json
-{
-  "success": true,
-  "path": "Library/ScriptAssemblies",
-  "message": "ScriptAssemblies cache deleted"
-}
+**What it deletes**:
+- `Library/ScriptAssemblies/`
+
+**Notes**:
+- Forces full recompilation on next Unity start
+- Use when compilation errors persist
+- Safe to run anytime
+
+---
+
+## configureunity
+
+Configure Unity path for a project.
+
+**Parameters**:
+- `projectPath` (string): Project name or full path
+- `unityExePath` (string): Unity.exe absolute path
+- `mcpPort` (optional, number): MCP service port (default: 52429)
+
+**Returns**: Success status
+
+**Example**:
+```javascript
+configureunity(
+  "ProjectA",
+  "C:\\Unity\\2021.3.10f1\\Editor\\Unity.exe",
+  52429
+)
 ```
 
-**Usage Notes**:
-- Forces full script recompilation on next Unity start
-- Useful for resolving:
-  - Persistent compilation errors
-  - Assembly reference issues
-  - Stale cache problems
-- Unity must be closed before deleting
-- Unity recreates folder on next startup
+**Notes**:
+- Creates/updates `unity_config.json`
+- Each project needs unique port
+- Use when adding new project
 
 ---
 
-## Workflow: Unity Lifecycle Management
+## Common Workflows
 
 ### First-Time Setup
-
 ```
-configureunity(unityExePath)
-  ↓
-startunity
-  ↓
-Wait 30-60s
-  ↓
-getunitystatus → editor_mcp_ready
-  ↓
-Ready to use MCP tools
+1. configureunity("MyProject", "C:\\Unity\\Editor\\Unity.exe", 52429)
+2. startunity("MyProject")
+3. Wait 30-60s
+4. getunitystatus("MyProject") → should be editor_mcp_ready
 ```
 
-### Compilation Check Workflow
-
-**Recommended: Use batchmode for compilation checks**
-
+### Check Compilation (Recommended)
 ```
-1. stopunity (if Unity is running)
-   ↓
-2. runbatchmode
-   ↓
-3. Check output:
-   ├─ ✅ Success → Done
-   └─ ❌ Failure → Fix first 20 errors
-   ↓
-4. Repeat step 2-3 until compilation succeeds
+1. stopunity
+2. runbatchmode("MyProject")
+3. Check errors → fix code
+4. Repeat 2-3 until success
 ```
 
-**Why batchmode is preferred**:
-- No MCP service dependency
-- Token-efficient output (max 20 errors)
-- Faster than Editor mode
-- Iterative error fixing workflow
-- No UI overhead
-
-**When to use Editor mode compilation**:
-- Need to test runtime behavior immediately after compilation
-- Working with Editor-only code that requires Unity Editor context
-- Debugging compilation issues that only occur in Editor mode
-
-**Editor mode workflow** (fallback):
+### Unity Frozen Recovery
 ```
-getunitystatus
-  ├─ editor_mcp_ready → recompileassemblies
-  ├─ editor_mcp_unresponsive → wait or restart
-  ├─ not_running → startunity
-  └─ batchmode → wait for completion
+1. stopunity
+2. deletescriptassemblies("MyProject")
+3. startunity("MyProject")
 ```
 
-### Normal Startup
-
+### Switch Projects
 ```
-getunitystatus
-  ↓
-not_running? → startunity → wait → getunitystatus
-  ↓
-editor_mcp_ready? → proceed
-  ↓
-editor_mcp_unresponsive? → wait 30s → retry
-```
-
-### Recovery from Hang/Freeze
-
-```
-getunitystatus → editor_mcp_unresponsive (>5min)
-  ↓
-stopunity
-  ↓
-deletescriptassemblies
-  ↓
-startunity
-  ↓
-Wait for editor_mcp_ready
-```
-
-### Clean Restart
-
-```
-stopunity
-  ↓
-deletescenebackups
-  ↓
-deletescriptassemblies
-  ↓
-startunity
+1. stopunity
+2. startunity("ProjectB")
+3. getunitystatus("ProjectB")
 ```
 
 ---
 
-## Configuration File
+## Multi-Project Configuration
 
-**Location**: `{UNITY_PROJECT_ROOT}/unity_config.json` (Unity project root directory containing Assets/ and ProjectSettings/)
-
-**Format**:
+**unity_config.json** structure:
 ```json
 {
-  "unityExePath": "path/to/Unity/Editor/Unity.exe",
-  "projectPath": "path/to/your/unity/project",
-  "mcpPort": 52429
+  "defaultProject": "ProjectA",
+  "projects": {
+    "ProjectA": {
+      "projectPath": "C:\\Path\\To\\ProjectA",
+      "unityExePath": "C:\\Unity\\Editor\\Unity.exe",
+      "mcpPort": 52429
+    },
+    "ProjectB": {
+      "projectPath": "C:\\Path\\To\\ProjectB",
+      "unityExePath": "C:\\Unity\\Editor\\Unity.exe",
+      "mcpPort": 52430
+    }
+  }
 }
 ```
 
-**Auto-created by**: `configureunity` tool
-
-**Used by**: All management tools and MCP tools
-
-**Multi-project support**: Each Unity project has its own independent configuration file, allowing multiple Unity projects to coexist with different Unity versions and ports.
+**Notes**:
+- `defaultProject` used when `projectPath` omitted
+- Each project must have unique `mcpPort`
+- Can run multiple Unity instances simultaneously
 
 ---
 
-## Tips and Best Practices
+## Troubleshooting
 
-**Startup timing**:
-- Unity takes 30-60s to fully start
-- MCP service starts after Unity Editor UI loads
-- Use `getunitystatus` in a loop with 5s intervals
-- Don't call MCP tools until `editor_mcp_ready`
+**startunity fails**:
+- Check `unity_config.json` exists
+- Verify Unity path correct
+- Check Unity license activated
 
-**Unresponsive detection**:
-- `editor_mcp_unresponsive` during compilation is normal
-- If unresponsive >5min, likely frozen
-- Recovery: stop → clean → restart
+**getunitystatus returns unresponsive**:
+- Wait 1-2 min (compiling/loading)
+- Restart if >5 min
 
-**Cleanup strategy**:
-- Run `deletescenebackups` before git commits
-- Run `deletescriptassemblies` when seeing weird compilation errors
-- `startunity` auto-cleans both (convenient)
+**Port conflicts**:
+- Change `mcpPort` in config
+- Unity auto-fallbacks 52429-52439
 
-**Process management**:
-- `stopunity` is safe to call anytime
-- No graceful shutdown (kills process)
-- Unsaved changes are lost
-- Use for recovery, not normal workflow
+**Batchmode hangs**:
+- Check full log at `Logs/batchmode_compile.log`
+- Verify project not corrupted

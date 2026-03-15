@@ -29,8 +29,13 @@ namespace MCP4Unity.Editor
         private const string ConfigFileName = "unity_config.json";
         private const string EndpointStateFolderName = "MCP4Unity";
         private const string EndpointStateFileName = "mcp_endpoint.json";
+        private const string AliveStateFileName = "mcp_alive.json";
         private const int DefaultPort = 52429;
+        private const int HeartbeatIntervalMs = 1000; // 1 second
         private string _currentListenerPrefix = BuildPrefix(DefaultPort);
+        private System.Threading.Timer _heartbeatTimer;
+        private readonly object _connectedClientsLock = new object();
+        private readonly HashSet<string> _connectedClients = new HashSet<string>();
         
         /// <summary>
         /// 获取当前配置的端口号（从 unity_config.json 读取）
@@ -233,6 +238,10 @@ namespace MCP4Unity.Editor
                 string selectedPrefix = BuildPrefix(port);
                 _currentListenerPrefix = selectedPrefix;
                 SaveEndpointState(port, selectedPrefix);
+                
+                // 启动心跳定时器
+                StartHeartbeat();
+                
                 Application.runInBackground = true;
                 //Debug.Log($"MCPService listening on {selectedPrefix}");
 
@@ -284,23 +293,33 @@ namespace MCP4Unity.Editor
                     {
                         string json = File.ReadAllText(path);
                         var endpoint = JsonConvert.DeserializeObject<MCPPublishedEndpoint>(json);
-                        if (endpoint != null && endpoint.Port == port && endpoint.Pid == Process.GetCurrentProcess().Id)
+                        if (endpoint != null && endpoint.Pid == Process.GetCurrentProcess().Id)
                         {
-                            Debug.Log($"Endpoint file confirms port {port} belongs to our PID — waiting briefly for zombie self-termination...");
-                            // The zombie listener checks staleness every 2s. 
-                            // Overwrite the endpoint file with a different port to trigger its self-termination.
-                            SaveEndpointState(0, "");
-                            Thread.Sleep(3000);
-                            
-                            // Retry after zombie should have exited
-                            try
+                            // Check alive file for port
+                            string alivePath = GetAliveStateFilePath();
+                            if (File.Exists(alivePath))
                             {
-                                TryStartHttpListener(port);
-                                return true;
-                            }
-                            catch (Exception retryEx) when (IsAddressAlreadyInUse(retryEx))
-                            {
-                                Debug.LogWarning($"Port {port} still in use after zombie kill attempt.");
+                                string aliveJson = File.ReadAllText(alivePath);
+                                var alive = JsonConvert.DeserializeObject<MCPAliveState>(aliveJson);
+                                if (alive != null && alive.Port == port)
+                                {
+                                    Debug.Log($"Endpoint file confirms port {port} belongs to our PID — waiting briefly for zombie self-termination...");
+                                    // The zombie listener checks staleness every 2s. 
+                                    // Overwrite the endpoint file with a different port to trigger its self-termination.
+                                    SaveEndpointState(0, "");
+                                    Thread.Sleep(3000);
+                                    
+                                    // Retry after zombie should have exited
+                                    try
+                                    {
+                                        TryStartHttpListener(port);
+                                        return true;
+                                    }
+                                    catch (Exception retryEx) when (IsAddressAlreadyInUse(retryEx))
+                                    {
+                                        Debug.LogWarning($"Port {port} still in use after zombie kill attempt.");
+                                    }
+                                }
                             }
                         }
                     }
@@ -371,16 +390,16 @@ namespace MCP4Unity.Editor
         {
             try
             {
-                string path = GetEndpointStateFilePath();
+                string path = GetAliveStateFilePath();
                 if (!File.Exists(path))
                     return true;
 
                 string json = File.ReadAllText(path);
-                var endpoint = JsonConvert.DeserializeObject<MCPPublishedEndpoint>(json);
-                if (endpoint == null)
+                var alive = JsonConvert.DeserializeObject<MCPAliveState>(json);
+                if (alive == null)
                     return true;
 
-                return endpoint.Port != boundPort;
+                return alive.Port != boundPort;
             }
             catch
             {
@@ -391,7 +410,9 @@ namespace MCP4Unity.Editor
         private void CleanupAfterStop()
         {
             StopHttpListener();
+            StopHeartbeat();
             DeleteEndpointState();
+            DeleteAliveState();
 
             bool shouldNotify;
             lock (_stateLock)
@@ -419,7 +440,9 @@ namespace MCP4Unity.Editor
 
             _cancellationTokenSource?.Cancel();
             StopHttpListener();
+            StopHeartbeat();
             DeleteEndpointState();
+            DeleteAliveState();
             _cancellationTokenSource?.Dispose();
             _cancellationTokenSource = null;
 
@@ -483,6 +506,13 @@ namespace MCP4Unity.Editor
             string directoryPath = Path.Combine(projectPath, "Library", EndpointStateFolderName);
             return Path.Combine(directoryPath, EndpointStateFileName);
         }
+        
+        private static string GetAliveStateFilePath()
+        {
+            string projectPath = Path.GetDirectoryName(Application.dataPath);
+            string directoryPath = Path.Combine(projectPath, "Library", EndpointStateFolderName);
+            return Path.Combine(directoryPath, AliveStateFileName);
+        }
 
         private static void SaveEndpointState(int port, string prefix)
         {
@@ -497,11 +527,9 @@ namespace MCP4Unity.Editor
 
                 var endpointState = new MCPPublishedEndpoint
                 {
-                    Url = $"http://127.0.0.1:{port}/mcp/",
-                    Port = port,
                     Pid = Process.GetCurrentProcess().Id,
                     ProjectPath = Path.GetDirectoryName(Application.dataPath),
-                    UpdatedAtUtc = DateTime.UtcNow.ToString("O")
+                    StartedAtUtc = DateTime.UtcNow.ToString("O")
                 };
 
                 string json = JsonConvert.SerializeObject(endpointState, Formatting.Indented);
@@ -510,6 +538,39 @@ namespace MCP4Unity.Editor
             catch (Exception ex)
             {
                 Debug.LogWarning($"Failed to save MCP endpoint state: {ex.Message}");
+            }
+        }
+        
+        private void UpdateAliveState()
+        {
+            try
+            {
+                string stateFilePath = GetAliveStateFilePath();
+                string stateDirectory = Path.GetDirectoryName(stateFilePath);
+                if (!Directory.Exists(stateDirectory))
+                {
+                    Directory.CreateDirectory(stateDirectory);
+                }
+
+                List<string> clients;
+                lock (_connectedClientsLock)
+                {
+                    clients = new List<string>(_connectedClients);
+                }
+
+                var aliveState = new MCPAliveState
+                {
+                    Port = CurrentPort,
+                    ConnectedClients = clients
+                };
+
+                string json = JsonConvert.SerializeObject(aliveState, Formatting.Indented);
+                File.WriteAllText(stateFilePath, json);
+                // 文件的最后修改时间即为心跳时间
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to update MCP alive state: {ex.Message}");
             }
         }
 
@@ -528,14 +589,59 @@ namespace MCP4Unity.Editor
                 Debug.LogWarning($"Failed to delete MCP endpoint state: {ex.Message}");
             }
         }
+        
+        private static void DeleteAliveState()
+        {
+            try
+            {
+                string stateFilePath = GetAliveStateFilePath();
+                if (File.Exists(stateFilePath))
+                {
+                    File.Delete(stateFilePath);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to delete MCP alive state: {ex.Message}");
+            }
+        }
+        
+        private void StartHeartbeat()
+        {
+            StopHeartbeat(); // 确保没有旧的定时器
+            
+            // 立即更新一次
+            UpdateAliveState();
+            
+            // 启动定时器，每秒更新一次
+            _heartbeatTimer = new System.Threading.Timer(
+                _ => UpdateAliveState(),
+                null,
+                HeartbeatIntervalMs,
+                HeartbeatIntervalMs
+            );
+        }
+        
+        private void StopHeartbeat()
+        {
+            if (_heartbeatTimer != null)
+            {
+                _heartbeatTimer.Dispose();
+                _heartbeatTimer = null;
+            }
+        }
 
         private class MCPPublishedEndpoint
         {
-            public string Url;
-            public int Port;
             public int Pid;
             public string ProjectPath;
-            public string UpdatedAtUtc;
+            public string StartedAtUtc;
+        }
+        
+        private class MCPAliveState
+        {
+            public int Port;
+            public List<string> ConnectedClients;
         }
 
         private class UnityConfig
@@ -544,29 +650,108 @@ namespace MCP4Unity.Editor
             public string projectPath;
             public int mcpPort = DefaultPort;
         }
+        
+        private class UnityMultiConfig
+        {
+            public string defaultProject;
+            public Dictionary<string, UnityProjectConfig> projects;
+        }
+        
+        private class UnityProjectConfig
+        {
+            public string projectPath;
+            public string unityExePath;
+            public int mcpPort = DefaultPort;
+        }
 
         private static string GetConfigFilePath()
         {
             string projectPath = Path.GetDirectoryName(Application.dataPath);
             return Path.Combine(projectPath, ConfigFileName);
         }
+        
+        /// <summary>
+        /// 向上查找 unity_config.json（多项目配置）
+        /// </summary>
+        private static string FindMultiProjectConfigFile()
+        {
+            string currentPath = Path.GetDirectoryName(Application.dataPath);
+            
+            while (!string.IsNullOrEmpty(currentPath))
+            {
+                string configPath = Path.Combine(currentPath, ConfigFileName);
+                if (File.Exists(configPath))
+                {
+                    return configPath;
+                }
+                
+                string parentPath = Directory.GetParent(currentPath)?.FullName;
+                if (parentPath == currentPath)
+                    break;
+                currentPath = parentPath;
+            }
+            
+            return null;
+        }
 
         public static int GetConfiguredPort()
         {
             try
             {
-                string projectPath = Path.GetDirectoryName(Application.dataPath);
-                string configPath = Path.Combine(projectPath, ConfigFileName);
+                string currentProjectPath = Path.GetDirectoryName(Application.dataPath);
                 
-                if (File.Exists(configPath))
+                // 1. 尝试查找多项目配置文件
+                string multiConfigPath = FindMultiProjectConfigFile();
+                if (!string.IsNullOrEmpty(multiConfigPath))
                 {
-                    string json = File.ReadAllText(configPath);
+                    string json = File.ReadAllText(multiConfigPath);
+                    var multiConfig = JsonConvert.DeserializeObject<UnityMultiConfig>(json);
+                    
+                    if (multiConfig?.projects != null)
+                    {
+                        // 遍历所有项目，匹配当前项目路径
+                        foreach (var kvp in multiConfig.projects)
+                        {
+                            var projectConfig = kvp.Value;
+                            if (projectConfig?.projectPath != null)
+                            {
+                                string normalizedConfigPath = Path.GetFullPath(projectConfig.projectPath);
+                                string normalizedCurrentPath = Path.GetFullPath(currentProjectPath);
+                                
+                                if (normalizedConfigPath.Equals(normalizedCurrentPath, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    if (projectConfig.mcpPort > 0 && projectConfig.mcpPort <= 65535)
+                                    {
+                                        Debug.Log($"[MCPService] Found port {projectConfig.mcpPort} for project '{kvp.Key}' in {multiConfigPath}");
+                                        return projectConfig.mcpPort;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        Debug.LogWarning($"[MCPService] Current project not found in {multiConfigPath}, using default port {DefaultPort}");
+                    }
+                }
+                
+                // 2. 回退：尝试读取项目本地的旧格式配置
+                string localConfigPath = Path.Combine(currentProjectPath, ConfigFileName);
+                if (File.Exists(localConfigPath))
+                {
+                    string json = File.ReadAllText(localConfigPath);
                     var config = JsonConvert.DeserializeObject<UnityConfig>(json);
                     if (config != null && config.mcpPort > 0 && config.mcpPort <= 65535)
+                    {
+                        Debug.Log($"[MCPService] Using port {config.mcpPort} from local config {localConfigPath}");
                         return config.mcpPort;
+                    }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[MCPService] Failed to read config: {ex.Message}");
+            }
+            
+            Debug.Log($"[MCPService] No config found, using default port {DefaultPort}");
             return DefaultPort;
         }
 
@@ -663,6 +848,13 @@ namespace MCP4Unity.Editor
         {
             try
             {
+                // 记录客户端连接
+                string clientId = context.Request.RemoteEndPoint?.ToString() ?? "unknown";
+                lock (_connectedClientsLock)
+                {
+                    _connectedClients.Add(clientId);
+                }
+                
                 string requestBody;
                 var readTask = ReadBodyAsync(context.Request);
                 if (await Task.WhenAny(readTask, Task.Delay(TimeSpan.FromSeconds(BodyReadTimeoutSeconds))).ConfigureAwait(false) != readTask)

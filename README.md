@@ -52,7 +52,9 @@ Unity 6 spawns `AssetImportWorker` child processes with `-batchMode`. The `[Init
 - Automatic scanning and registration of `[Tool]`-attributed methods
 - Tool management UI: **Window > MCP Service Manager**
 - Auto-start on editor launch
-- Project-isolated endpoint discovery (`Library/MCP4Unity/mcp_endpoint.json`)
+- **Dual-file state system**:
+  - `mcp_endpoint.json` - Process marker (PID, startup time)
+  - `mcp_alive.json` - Heartbeat file (port, connected clients, updated every second)
 - Background stability — tool calls work reliably even when Unity is unfocused
 - Domain reload safe — survives script recompilation
 
@@ -289,7 +291,7 @@ startunity
 
 ### Port conflicts
 
-Unity auto-fallbacks from port 8080 if occupied. Check `Library/MCP4Unity/mcp_endpoint.json` for the actual port.
+Unity auto-fallbacks from port 8080 if occupied. Check `Library/MCP4Unity/mcp_alive.json` for the actual port.
 
 ## License
 

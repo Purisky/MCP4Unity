@@ -4,86 +4,57 @@ Common issues and solutions for MCP4Unity.
 
 ## MCP Tools Not Responding
 
-### Symptom
-Tools timeout or return no response.
+**Symptom**: Tools timeout or return no response.
 
-### Diagnosis Steps
-
-1. **Check Unity status**:
-   ```
-   getunitystatus
-   ```
-   
-2. **Verify endpoint file exists**:
-   - Check `Library/MCP4Unity/mcp_endpoint.json`
-   - If missing, MCP service isn't running
-
-3. **Check Unity Console**:
-   - Look for MCPService startup/shutdown messages
-   - Check for errors during service initialization
-
-4. **Test HTTP connectivity** (manual):
+**Diagnosis**:
+1. `getunitystatus` - Check Unity state
+2. Verify state files exist:
+   - `Library/MCP4Unity/mcp_endpoint.json` (process marker)
+   - `Library/MCP4Unity/mcp_alive.json` (heartbeat, updated every 1s)
+3. Check Unity Console for MCPService errors
+4. Test HTTP manually:
    ```bash
    curl --noproxy "*" -s -m 5 -X POST http://127.0.0.1:52429/mcp/ \
-     -H "Content-Type: application/json" \
-     -d '{"method":"listtools"}'
+     -H "Content-Type: application/json" -d '{"method":"listtools"}'
    ```
 
-### Solutions
+**Solutions**:
 
-**If `getunitystatus` returns `not_running`**:
-```
-startunity
-Wait 30-60s
-getunitystatus → should be editor_mcp_ready
-```
-
-**If `getunitystatus` returns `editor_mcp_unresponsive`**:
-- Unity is starting up, compiling, or loading
-- Wait 1-2 minutes and retry
-- If persists >5 minutes, restart Unity
-
-**If `getunitystatus` returns `batchmode`**:
-- Unity is running in headless mode (no MCP service)
-- Stop Unity and start normally via `startunity`
+| Status | Action |
+|--------|--------|
+| `not_running` | `startunity` → wait 30-60s → `getunitystatus` |
+| `editor_mcp_unresponsive` | Wait 1-2 min (compiling/loading), restart if >5 min |
+| `batchmode` | `stopunity` → `startunity` (batchmode has no MCP) |
 
 ---
 
 ## Unity Hangs or Freezes
 
-### Symptom
-Unity becomes unresponsive, tools timeout indefinitely.
+**Symptom**: Unity unresponsive, tools timeout indefinitely.
 
-### Solution
-
+**Solution**:
 ```
 stopunity
 deletescriptassemblies
 startunity
 ```
 
-**Why this works**:
-- `stopunity` force-kills the frozen process
-- `deletescriptassemblies` clears stale cache
-- `startunity` performs clean startup with cache cleanup
+**Why**: Force-kill frozen process, clear stale cache, clean startup.
 
 ---
 
 ## Compilation Errors Persist
 
-### Symptom
-`recompileassemblies` returns errors that don't match actual code state.
+**Symptom**: `recompileassemblies` returns errors that don't match code.
 
-### Solution
-
-**Step 1: Clear cache and restart**:
+**Step 1 - Clear cache**:
 ```
 stopunity
 deletescriptassemblies
 startunity
 ```
 
-**Step 2: Force full reimport** (if Step 1 fails):
+**Step 2 - Force reimport** (if Step 1 fails):
 ```
 stopunity
 Delete Library/ScriptAssemblies/
@@ -91,31 +62,28 @@ Delete Library/Bee/
 startunity
 ```
 
-**Step 3: Check for actual errors**:
+**Step 3 - Verify**:
 - Open Unity manually
 - Check Console for real errors
 - Verify code compiles in IDE
 
 ---
 
-## Stale Endpoint File
+## Stale State Files
 
-### Symptom
-`getunitystatus` shows `editor_mcp_ready` but tools still timeout.
+**Symptom**: `getunitystatus` shows ready but tools timeout.
 
-### Cause
-Endpoint file (`Library/MCP4Unity/mcp_endpoint.json`) contains stale PID from previous Unity session.
+**Cause**: State files contain stale data:
+- `mcp_endpoint.json` - Stale PID
+- `mcp_alive.json` - Stale heartbeat (>3s old)
 
-### Solution
-
-**Automatic** (getunitystatus validates PID):
-- `getunitystatus` checks if PID matches running process
-- Returns `not_running` if PID is stale
+**Automatic**: `getunitystatus` validates PID and heartbeat, returns `not_running` if stale.
 
 **Manual**:
 ```
 stopunity
 Delete Library/MCP4Unity/mcp_endpoint.json
+Delete Library/MCP4Unity/mcp_alive.json
 startunity
 ```
 
@@ -123,15 +91,26 @@ startunity
 
 ## Port Conflicts
 
-### Symptom
-MCPService fails to start, Unity Console shows "Address already in use" error.
+**Symptom**: MCPService fails to start, Console shows "Address already in use".
 
-### Cause
-Another process is using the configured MCP port (default 52429).
+**Cause**: Another process using port 52429.
 
-### Solution
+**Solution 1 - Auto-fallback**:
+Unity auto-tries ports 52429-52439. Check `Library/MCP4Unity/mcp_alive.json` for actual port.
 
-**Option 1: Kill conflicting process**:
+**Solution 2 - Change port**:
+Edit `unity_config.json`:
+```json
+{
+  "projects": {
+    "MyProject": {
+      "mcpPort": 52430
+    }
+  }
+}
+```
+
+**Solution 3 - Kill conflicting process**:
 ```bash
 # Windows
 netstat -ano | findstr :52429
@@ -142,181 +121,219 @@ lsof -i :52429
 kill -9 <pid>
 ```
 
-**Option 2: Change MCP port**:
-```
-# Configure a different port for this project
-configureunity unityExePath="..." projectPath="..." mcpPort=52430
-```
+---
 
-Then restart Unity to apply the new port configuration.
+## Scene Not Saving
+
+**Symptom**: `savescene()` succeeds but changes not persisted.
+
+**Causes**:
+1. Scene not marked dirty
+2. Scene path invalid
+3. Unity in play mode
+
+**Solutions**:
+```
+# Mark scene dirty explicitly
+runcode("UnityEditor.SceneManagement.EditorSceneManager", "MarkSceneDirty", 
+  "UnityEngine.SceneManagement.SceneManager.GetActiveScene()")
+
+# Save with explicit path
+savesceneas("Assets/Scenes/MyScene.unity")
+
+# Exit play mode first
+runcode("UnityEditor.EditorApplication", "set_isPlaying", "false")
+```
 
 ---
 
-## Proxy Interference
+## GameObject Not Found
 
-### Symptom
-Tools work in some environments but not others. HTTP requests fail with proxy errors.
+**Symptom**: `getgameobjectinfo("ObjectName")` returns "not found".
 
-### Cause
-System HTTP proxy intercepts localhost requests.
+**Causes**:
+1. Object inactive
+2. Wrong scene loaded
+3. Object in child hierarchy (need full path)
 
-### Solution
-
-**Already handled** in TypeScript server:
-```typescript
-// server/src/unity-client.ts uses proxy: false
-axios.post(url, data, { proxy: false })
+**Solutions**:
 ```
+# Check active scene
+getactivescene()
 
-**If still failing**, check system proxy settings:
-- Windows: Internet Options → Connections → LAN Settings
-- Ensure "Bypass proxy server for local addresses" is checked
+# Get full hierarchy
+gethierarchy()
+
+# Use full path
+getgameobjectinfo("Parent/Child/ObjectName")
+
+# Search inactive objects
+runcode("UnityEngine.GameObject", "Find", "ObjectName")  # Only finds active
+# For inactive, use hierarchy search
+```
 
 ---
 
-## Domain Reload Issues
+## Component Property Not Updating
 
-### Symptom
-MCP service stops responding after script changes or entering Play mode.
+**Symptom**: `setserializedproperty()` succeeds but value unchanged.
 
-### Cause
-Unity's domain reload stops and restarts the MCP service.
+**Causes**:
+1. Wrong property path
+2. Property not serialized
+3. Property type mismatch
 
-### Solution
-
-**Normal behavior**:
-- Service automatically restarts after domain reload
-- Wait 5-10 seconds after compilation
-- Use `getunitystatus` to check when ready
-
-**If service doesn't restart**:
+**Solutions**:
 ```
+# List all properties first
+getserializedproperties("ObjectName", "ComponentType")
+
+# Use exact property path
+setserializedproperty("ObjectName", "Transform", "m_LocalPosition.x", "5.0")
+
+# For non-serialized properties, use runcode
+runcode("UnityEngine.GameObject.Find('ObjectName').GetComponent<Rigidbody>()", 
+  "set_velocity", "new Vector3(1, 0, 0)")
+```
+
+---
+
+## TypeScript Server Issues
+
+**Symptom**: MCP server fails to start or crashes.
+
+**Check Node.js version**:
+```bash
+node --version  # Should be 18+
+```
+
+**Rebuild server**:
+```bash
+cd {SKILL_ROOT}/server
+npm install
+npm run build
+```
+
+**Check logs**:
+- Server logs to stdout/stderr
+- Unity logs to `Library/MCP4Unity/mcp_endpoint.json`
+
+**Common errors**:
+- `EADDRINUSE`: Port conflict (see Port Conflicts section)
+- `MODULE_NOT_FOUND`: Run `npm install`
+- `SyntaxError`: Run `npm run build`
+
+---
+
+## Unity Won't Start
+
+**Symptom**: `startunity` times out or Unity crashes on startup.
+
+**Check Unity path**:
+```
+# Verify unity_config.json
+cat unity_config.json
+```
+
+**Check Unity version**:
+- MCP4Unity requires Unity 2021.3+
+- Tested on Unity 6 (6000.3.10f1)
+
+**Check project corruption**:
+```
+# Delete cache and restart
 stopunity
+Delete Library/
 startunity
 ```
 
----
-
-## Async Tool Timeouts
-
-### Symptom
-Async tools (like `recompileassemblies`) timeout after 25 seconds.
-
-### Cause
-Operation takes longer than the 25-second timeout.
-
-### Solution
-
-**For compilation**:
-- Large projects may exceed timeout
-- Retry the operation or check Unity console for progress
-
-**For custom async tools**:
-- Break long operations into smaller chunks
-- Return progress updates instead of waiting for completion
-- Consider polling pattern instead of single long-running call
+**Check Unity license**:
+- Open Unity manually
+- Verify license is activated
 
 ---
 
-## Background Unity Responsiveness
+## Batchmode Compilation Fails
 
-### Symptom
-Tools are slow (200-500ms) when Unity is in background or minimized.
+**Symptom**: `runbatchmode` returns exit code 1 but no errors shown.
 
-### Cause
-Windows reduces update frequency for background applications.
-
-### Solution
-
-**Normal behavior**:
-- Background: ~100-200ms latency
-- Focused: ~50ms latency
-- This is expected and handled by Win32 wake mechanism
-
-**If latency >1 second**:
-- Check if Unity is actually frozen (Task Manager CPU usage)
-- Restart Unity if frozen
-
----
-
-## Configuration Issues
-
-### Symptom
-`startunity` fails with "Unity path not configured" error.
-
-### Solution
-
+**Check full log**:
 ```
-configureunity("C:/Path/To/Unity.exe")
+# Log path shown in runbatchmode output
+cat <project>/Logs/batchmode_compile.log
 ```
 
-**Finding Unity path**:
-- Unity Hub: Preferences → Installs → Show in Explorer
-- Typical paths:
-  - Windows: `path/to/Unity/Hub/Editor/{version}/Editor/Unity.exe`
-  - Mac: `/Applications/Unity/Hub/Editor/{version}/Unity.app/Contents/MacOS/Unity`
-  - Linux: `~/Unity/Hub/Editor/{version}/Editor/Unity`
+**Common causes**:
+- Unity license issue
+- Project corruption
+- Missing dependencies
 
----
-
-## Scene Backup Clutter
-
-### Symptom
-Many `*.backup` files in Assets folder.
-
-### Solution
-
+**Solution**:
 ```
-deletescenebackups
+# Try manual batchmode
+Unity.exe -batchmode -projectPath <path> -quit -logFile -
 ```
-
-**When to use**:
-- Before committing to version control
-- After recovering from crashes
-- General cleanup
 
 ---
 
 ## Quick Diagnostic Checklist
 
-Run these in order to diagnose most issues:
+Run in order:
 
 1. `getunitystatus` - Check Unity state
-2. `getunityconsolelog` - Check for Unity errors
-3. Check `Library/MCP4Unity/mcp_endpoint.json` exists
-4. Restart Unity: `stopunity` → `startunity`
+2. `getunityconsolelog` - Check for errors
+3. Check state files:
+   - `Library/MCP4Unity/mcp_endpoint.json` (process marker)
+   - `Library/MCP4Unity/mcp_alive.json` (heartbeat)
+4. Restart: `stopunity` → `startunity`
 5. Clear cache: `deletescriptassemblies` before restart
-6. Check Unity Console manually for service errors
+6. Check Unity Console manually
 
 ---
 
 ## Getting Help
 
-If issues persist:
+If issues persist, collect:
 
-1. **Collect diagnostic info**:
-   - Output of `getunitystatus`
+1. **Diagnostic info**:
+   - `getunitystatus` output
    - Unity Console logs
-   - Contents of `Library/MCP4Unity/mcp_endpoint.json`
-   - TypeScript server logs (if running manually)
+   - State file contents:
+     - `Library/MCP4Unity/mcp_endpoint.json`
+     - `Library/MCP4Unity/mcp_alive.json`
+   - TypeScript server logs
 
-2. **Check Unity Console** for MCPService messages:
-   - Service startup/shutdown events
-   - Port binding errors
-   - Tool execution errors
+2. **Unity Console** MCPService messages:
+   - Startup/shutdown logs
+   - Error messages
+   - Port binding info
 
-3. **Test manually**:
-   ```bash
-   curl --noproxy "*" -X POST http://127.0.0.1:52429/mcp/ \
-     -H "Content-Type: application/json" \
-     -d '{"method":"listtools"}'
-   ```
-   
-   Note: Replace `52429` with your configured port if different.
+3. **System info**:
+   - Unity version
+   - Node.js version
+   - OS version
 
-4. **Verify MCP4Unity submodule**:
-   ```bash
-   cd Assets/MCP4Unity
-   git status
-   # Should show clean working tree
-   ```
+---
+
+## Advanced: Manual Cleanup
+
+**When to use**: After crashes, before version control commits, general cleanup.
+
+**Full cleanup**:
+```
+stopunity
+Delete Library/ScriptAssemblies/
+Delete Library/Bee/
+Delete Library/MCP4Unity/
+Delete Temp/
+startunity
+```
+
+**Preserve settings**:
+```
+stopunity
+Delete Library/ScriptAssemblies/
+Delete Library/Bee/
+# Keep Library/EditorUserSettings.asset
+startunity
+```

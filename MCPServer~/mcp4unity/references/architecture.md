@@ -1,20 +1,18 @@
 # Architecture & Internals
 
-Technical details about MCP4Unity's implementation and communication flow.
+Technical implementation details of MCP4Unity.
 
 ## System Overview
 
 ```
-AI Agent (stdio) ─► Node.js MCP Server (TypeScript) ─► HTTP POST ─► Unity Editor (MCPService)
+AI Agent (stdio) ─► Node.js MCP Server ─► HTTP POST ─► Unity Editor (MCPService)
 ```
-
-### Components
 
 | Component | Technology | Role |
 |-----------|-----------|------|
-| **AI Agent** | Claude/OpenCode | Initiates tool calls via MCP protocol |
-| **MCP Server** | Node.js + TypeScript | Translates MCP stdio ↔ HTTP |
-| **Unity MCPService** | C# + HttpListener | Receives HTTP, executes tools on main thread |
+| **AI Agent** | Claude/OpenCode | Initiates tool calls via MCP |
+| **MCP Server** | Node.js + TypeScript | Translates stdio ↔ HTTP |
+| **Unity MCPService** | C# + HttpListener | Executes tools on main thread |
 
 ---
 
@@ -23,109 +21,64 @@ AI Agent (stdio) ─► Node.js MCP Server (TypeScript) ─► HTTP POST ─► 
 **Location**: `{SKILL_ROOT}/server/`
 
 **Key Files**:
-- `src/index.ts` - MCP server entry point, stdio transport
-- `src/unity-client.ts` - HTTP client for Unity communication
-- `src/unity-manager.ts` - Unity process management (start/stop/clean)
-
-**Build**:
-```bash
-cd {SKILL_ROOT}/server
-npm run build
-```
+- `index.ts` - MCP stdio transport
+- `unity-client.ts` - HTTP client
+- `unity-manager.ts` - Process management
 
 **Configuration**:
-- Unity paths stored in `{SKILL_ROOT}/unity_config.json`
-- Endpoint discovery via `Library/MCP4Unity/mcp_endpoint.json`
-
-**HTTP Client Settings**:
-```typescript
-axios.post(url, data, {
-  proxy: false,  // Bypass system HTTP proxy
-  timeout: 30000 // 30-second timeout
-})
-```
+- Unity paths: `unity_config.json`
+- State files (in `Library/MCP4Unity/`):
+  - `mcp_endpoint.json` - Process marker (PID, ProjectPath, StartedAtUtc)
+  - `mcp_alive.json` - Heartbeat (Port, ConnectedClients[], updated every 1s, 3s timeout)
 
 ---
 
 ## Unity MCPService
 
-**Location**: `Assets/MCP4Unity/Runtime/MCPService.cs`
+**Location**: `Assets/MCP4Unity/Editor/MCPService.cs`
 
-**Initialization**:
-```csharp
-[InitializeOnLoad]
-public class MCPService
-{
-    static MCPService()
-    {
-        // Auto-start on Unity load
-        StartService();
-    }
-}
-```
+**Auto-start**: `[InitializeOnLoad]` static constructor
 
 **HTTP Listener**:
-- Runs on `http://127.0.0.1:{mcpPort}/mcp/` (default port: 52429)
-- Listens for POST requests with JSON payloads
-- Two endpoints: `listtools` and `calltool`
+- Endpoint: `http://127.0.0.1:{port}/mcp/` (default: 52429)
+- Methods: `listtools`, `calltool`
 
 **Thread Model**:
-- HTTP listener runs on thread pool
-- `listtools` executes immediately on thread pool
-- `calltool` queues to main thread via `EditorMainThread`
+- HTTP listener: thread pool
+- `listtools`: immediate (thread pool)
+- `calltool`: queued to main thread via `EditorMainThread`
 
 ---
 
 ## Data Flow
 
-### 1. Tool Discovery (listtools)
-
+### Tool Discovery (listtools)
 ```
-AI Agent → MCP Server → HTTP POST /mcp/ {"method":"listtools"}
+AI Agent → MCP Server → HTTP POST {"method":"listtools"}
   ↓
-Unity MCPService (thread pool)
+MCPFunctionInvoker.GetTools() (reflection scan for [Tool])
   ↓
-MCPFunctionInvoker.GetTools() - Reflection scan for [Tool] attributes
-  ↓
-Return JSON array of tool definitions
-  ↓
-MCP Server → AI Agent
+Return JSON tool definitions
 ```
 
-**Performance**: Instant (cached after first call)
-
-### 2. Tool Execution (calltool)
-
+### Tool Execution (calltool)
 ```
-AI Agent → MCP Server → HTTP POST /mcp/ {"method":"calltool", "name":"...", "arguments":{...}}
+AI Agent → MCP Server → HTTP POST {"method":"calltool", "name":"...", "arguments":{}}
   ↓
-Unity MCPService (thread pool)
+EditorMainThread.RunAsync(() => MCPFunctionInvoker.Invoke(...))
   ↓
-EditorMainThread.RunAsync(() => {
-    MCPFunctionInvoker.Invoke(toolName, args)
-})
+Queue to main thread → EditorApplication.update callback
   ↓
-Queue action to main thread
-  ↓
-EditorApplication.update callback (main thread)
-  ↓
-Execute tool method
-  ↓
-Return result
-  ↓
-MCP Server → AI Agent
+Execute tool → Return result
 ```
 
-**Latency**:
-- Focused Unity: ~50ms
-- Background Unity: ~100-200ms
-- Timeout: 25 seconds
+**Latency**: 50ms (focused) / 100-200ms (background) | Timeout: 25s
 
 ---
 
 ## EditorMainThread Queue
 
-**Purpose**: Execute code on Unity's main thread from background threads.
+Executes code on Unity's main thread from background threads.
 
 **Implementation**:
 ```csharp
@@ -138,7 +91,7 @@ public static Task<T> RunAsync<T>(Func<T> action)
         try { tcs.SetResult(action()); }
         catch (Exception ex) { tcs.SetException(ex); }
     });
-    WakeUnity(); // Win32 wake mechanism
+    WakeUnity(); // Win32 wake
     return tcs.Task;
 }
 ```
@@ -146,49 +99,37 @@ public static Task<T> RunAsync<T>(Func<T> action)
 **Update Loop**:
 ```csharp
 [InitializeOnLoad]
-static class EditorMainThread
+static EditorMainThread()
 {
-    static EditorMainThread()
-    {
-        EditorApplication.update += ProcessQueue;
-    }
-    
-    static void ProcessQueue()
-    {
-        while (_actions.TryDequeue(out var action))
-        {
-            action();
-        }
-    }
+    EditorApplication.update += ProcessQueue;
+}
+
+static void ProcessQueue()
+{
+    while (_actions.TryDequeue(out var action))
+        action();
 }
 ```
 
 ---
 
-## Background Wake Mechanism (Windows)
+## Background Stability (Windows)
 
-**Problem**: Unity's `EditorApplication.update` runs infrequently when Unity is in background.
-
-**Solution**: Win32 API calls to wake Unity's message loop.
+When Unity is unfocused/minimized, `EditorApplication.update` may not fire. Win32 APIs wake the editor:
 
 ```csharp
-[DllImport("user32.dll")]
-static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-
 [DllImport("user32.dll")]
 static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
 [DllImport("user32.dll")]
-static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
+static extern IntPtr SetTimer(IntPtr hWnd, IntPtr nIDEvent, uint uElapse, IntPtr lpTimerFunc);
 
 static void WakeUnity()
 {
-    var hwnd = FindWindow("UnityWndClass", null);
-    if (hwnd != IntPtr.Zero)
-    {
-        PostMessage(hwnd, WM_NULL, IntPtr.Zero, IntPtr.Zero);
-        InvalidateRect(hwnd, IntPtr.Zero, false);
-    }
+    var hwnd = Process.GetCurrentProcess().MainWindowHandle;
+    PostMessage(hwnd, WM_NULL, IntPtr.Zero, IntPtr.Zero);
+    SetTimer(hwnd, IntPtr.Zero, 100, IntPtr.Zero);
+    InvalidateRect(hwnd, IntPtr.Zero, false);
 }
 ```
 
@@ -196,37 +137,43 @@ static void WakeUnity()
 
 ---
 
-## Endpoint Discovery
+## State File System
 
-**File**: `Library/MCP4Unity/mcp_endpoint.json`
-
-**Format**:
+### mcp_endpoint.json - Process Marker
 ```json
 {
-  "port": 52429,
-  "pid": 12345,
-  "timestamp": "2026-03-14T10:30:00Z"
+  "Pid": 12345,
+  "ProjectPath": "E:\\Path\\To\\Project",
+  "StartedAtUtc": "2026-03-15T12:34:14Z"
 }
 ```
+**Lifecycle**: Created on start, deleted on graceful stop
+**Purpose**: Process identity verification
 
-**Lifecycle**:
-- **Created**: When MCPService starts successfully
-- **Updated**: On every service restart
-- **Deleted**: When Unity quits or service stops
-- **Validated**: `getunitystatus` checks PID matches running process
+### mcp_alive.json - Heartbeat
+```json
+{
+  "Port": 52429,
+  "ConnectedClients": ["127.0.0.1:50880"]
+}
+```
+**Lifecycle**: Created on start, updated every 1s, deleted on stop
+**Purpose**: Heartbeat detection (3s timeout) + port discovery
 
-**Why in Library/**:
-- Project-isolated (multiple Unity projects don't interfere)
-- Gitignored by default
-- Cleaned on Library folder deletion
+**Heartbeat Detection**:
+- TypeScript reads file mtime (`fs.statSync(file).mtime`)
+- If `now - mtime > 3000ms`, service is dead
+- Detects frozen Unity main thread
+
+**Why Dual Files**:
+- `mcp_endpoint.json` - Stable identity (PID, startup time)
+- `mcp_alive.json` - Dynamic state (port, clients, heartbeat)
 
 ---
 
 ## Domain Reload Handling
 
-**Problem**: Unity reloads assemblies on script changes, stopping all static state.
-
-**Solution**: Lifecycle hooks.
+Unity reloads assemblies on script changes. Lifecycle hooks handle this:
 
 ```csharp
 [InitializeOnLoad]
@@ -240,92 +187,111 @@ public class MCPService
     
     static void OnBeforeReload()
     {
-        StopService(); // Clean shutdown before reload
+        StopService(); // Clean shutdown
     }
 }
 ```
 
-**After reload**: `[InitializeOnLoad]` constructor runs again, restarting service.
-
----
-
-## AssetImportWorker Guard
-
-**Problem**: Unity 6 spawns worker processes for asset import. If they try to start MCPService, port conflicts occur.
-
-**Solution**: Detect worker process via command-line args.
-
+**Zombie Listener Detection**:
 ```csharp
-static bool IsAssetImportWorker()
+private static bool IsEndpointStale(int boundPort)
 {
-    var args = Environment.GetCommandLineArgs();
-    return args.Any(a => a.Contains("AssetImportWorker"));
+    var alive = ReadAliveState();
+    return alive == null || alive.Port != boundPort;
 }
 
-static MCPService()
+// Listener loop checks staleness every 2s
+while (!IsEndpointStale(boundPort))
 {
-    if (IsAssetImportWorker()) return; // Skip service startup
-    StartService();
+    // Process requests
 }
+// Self-terminate if stale
 ```
 
 ---
 
-## Tool Invocation
+## MCPFunctionInvoker
 
-**Reflection-based dispatch**:
+Discovers and invokes `[Tool]`-attributed methods via reflection.
 
+**Tool Discovery**:
+```csharp
+public static List<ToolDefinition> GetTools()
+{
+    var tools = new List<ToolDefinition>();
+    foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+    {
+        foreach (var type in assembly.GetTypes())
+        {
+            foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+            {
+                var attr = method.GetCustomAttribute<ToolAttribute>();
+                if (attr != null)
+                    tools.Add(CreateToolDefinition(method, attr));
+            }
+        }
+    }
+    return tools;
+}
+```
+
+**Tool Invocation**:
 ```csharp
 public static object Invoke(string toolName, Dictionary<string, object> args)
 {
-    // 1. Find method by name (case-insensitive)
-    var method = FindToolMethod(toolName);
-    
-    // 2. Match arguments to parameters
-    var parameters = MapArguments(method, args);
-    
-    // 3. Invoke
-    var result = method.Invoke(null, parameters);
-    
-    // 4. Handle async
-    if (result is Task task)
-    {
-        task.Wait();
-        result = GetTaskResult(task);
-    }
-    
-    return result;
+    var method = _toolRegistry[toolName];
+    var parameters = MapParameters(method, args);
+    return method.Invoke(null, parameters);
 }
 ```
 
-**Async handling**:
+**Async Support**:
 ```csharp
-if (method.ReturnType.IsGenericType && 
-    method.ReturnType.GetGenericTypeDefinition() == typeof(Task<>))
+if (method.ReturnType == typeof(Task<string>))
 {
-    var task = (Task)method.Invoke(null, parameters);
-    await task;
-    var resultProperty = task.GetType().GetProperty("Result");
-    return resultProperty.GetValue(task);
+    var task = (Task<string>)method.Invoke(null, parameters);
+    return await task;
 }
 ```
 
 ---
 
-## Error Handling
+## Port Allocation
 
-**HTTP Level**:
-- Connection refused → Unity not running
-- Timeout → Unity frozen or main thread blocked
-- 500 error → Tool execution exception
+**Strategy**: Prefer configured port, fallback on conflict.
 
-**Tool Level**:
-- Return error strings instead of throwing
-- Exceptions caught and serialized to JSON
+```csharp
+public void Start()
+{
+    int port = GetConfiguredPort(); // From unity_config.json
+    if (!TryStartHttpListener(port))
+    {
+        // Port in use, try fallback
+        for (int i = 1; i <= 10; i++)
+        {
+            if (TryStartHttpListener(port + i))
+                break;
+        }
+    }
+}
+```
 
-**Timeout**:
-- `EditorMainThread.RunAsync` has 25-second timeout
-- Prevents indefinite hangs on modal dialogs or long operations
+**Zombie Reclaim**:
+```csharp
+catch (HttpListenerException ex) when (IsAddressInUse(ex))
+{
+    // Check if zombie from our PID
+    var endpoint = ReadEndpointState();
+    var alive = ReadAliveState();
+    if (endpoint.Pid == CurrentPid && alive.Port == port)
+    {
+        // Trigger zombie self-termination
+        SaveEndpointState(0, "");
+        Thread.Sleep(3000);
+        TryStartHttpListener(port); // Retry
+    }
+}
+```
 
 ---
 
@@ -333,33 +299,26 @@ if (method.ReturnType.IsGenericType &&
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|
-| `listtools` | <10ms | Thread pool, cached |
-| `calltool` (focused) | ~50ms | Main thread queue |
-| `calltool` (background) | ~100-200ms | Win32 wake + queue |
-| Async tool | Variable | Depends on operation |
-| Timeout | 25s | Hard limit |
+| listtools | <10ms | Cached after first call |
+| calltool (sync) | 50-200ms | Depends on Unity focus |
+| calltool (async) | Variable | Up to 25s timeout |
+| Heartbeat update | 1s interval | File write every second |
 
 ---
 
-## Security Considerations
+## Security
 
-**Localhost only**:
-- HTTP listener binds to `127.0.0.1` (not `0.0.0.0`)
-- No external network access
+**Localhost only**: HTTP listener binds to `127.0.0.1` (not `0.0.0.0`)
 
-**No authentication**:
-- Assumes local machine is trusted
-- MCP server and Unity run on same machine
+**No authentication**: Assumes local machine is trusted
 
-**Arbitrary code execution**:
-- `runcode` tool can execute any static method
-- Intended for trusted AI agents only
+**Arbitrary code execution**: `runcode` tool can execute any static method (intended for trusted AI agents only)
 
 ---
 
 ## Debugging
 
-**Enable verbose logging** (Unity Console):
+**Enable verbose logging**:
 ```csharp
 // In MCPService.cs
 private const bool DEBUG = true;
@@ -372,11 +331,10 @@ curl --noproxy "*" -X POST http://127.0.0.1:52429/mcp/ \
   -d '{"method":"listtools"}'
 ```
 
-Note: Replace `52429` with your configured port if different.
-
-**Check endpoint file**:
+**Check state files**:
 ```bash
 cat Library/MCP4Unity/mcp_endpoint.json
+cat Library/MCP4Unity/mcp_alive.json
 ```
 
 **Monitor process**:
@@ -392,16 +350,11 @@ ps aux | grep Unity
 
 ## Extending the System
 
-**Add new management tools** (no Unity running):
+**Add management tools** (no Unity running):
 - Implement in `server/src/unity-manager.ts`
 - Register in `server/src/index.ts`
 
-**Add new Unity tools** (requires Unity):
+**Add Unity tools** (requires Unity):
 - Create in `Assets/Editor/MCPTools/`
 - Use `[Tool]` attribute
-- See `references/authoring-guide.md`
-
-**Modify communication protocol**:
-- Edit `server/src/unity-client.ts` (TypeScript side)
-- Edit `Assets/MCP4Unity/Runtime/MCPService.cs` (Unity side)
-- Keep JSON format compatible
+- See `authoring-guide.md`

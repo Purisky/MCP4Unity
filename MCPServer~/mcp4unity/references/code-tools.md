@@ -1,21 +1,14 @@
 # Code Tools Reference
 
-Code tools handle Unity script compilation, console log retrieval, and arbitrary editor code execution.
+Script compilation, console logs, and editor code execution.
 
-## Available Tools
+## recompileassemblies
 
-### recompileassemblies
-
-**Purpose**: Trigger Unity script compilation and wait for completion.
+Trigger Unity script compilation and wait for completion.
 
 **Parameters**: None
 
-**Returns**: Formatted string with compilation results (not JSON):
-- Success/failure status
-- List of errors with file path, line number, and message
-- List of warnings with file path, line number, and message
-
-**Example Response**:
+**Returns** (formatted text):
 ```
 ✅ 编译成功
 
@@ -28,79 +21,63 @@ Or on failure:
 ❌ 编译失败
 
 错误 (1):
-  Assets/Scripts/Player.cs(42,5): CS0103: The name 'transform' does not exist in the current context
+  Assets/Scripts/Player.cs(42,5): CS0103: The name 'transform' does not exist
 ```
 
-**Usage Notes**:
-- Blocks until compilation completes (no timeout)
-- Automatically refreshes AssetDatabase before compiling
-- Returns immediately if no scripts need recompilation
-- Note: EditorMainThread has 25-second timeout for queuing, but compilation itself waits indefinitely
+**Notes**:
+- Blocks until compilation completes
+- Auto-refreshes AssetDatabase
+- Returns immediately if nothing to compile
 
 ---
 
-### getunityconsolelog
+## getunityconsolelog
 
-**Purpose**: Retrieve recent Unity Console entries.
+Retrieve Unity Console entries.
 
 **Parameters**:
-- `filter` (optional, string, default: "all"): Filter by log type
-  - `"all"` - All log types (default)
-  - `"error"` - Only errors
-  - `"warning"` - Only warnings
-  - `"log"` - Only regular logs
-- `collapse` (optional, bool, default: false): Collapse duplicate log entries
-- `maxCount` (optional, int, default: 10): Maximum number of logs to return
+- `filter` (optional, string, default: "all"): Log type
+  - `"all"`: All logs
+  - `"error"`: Only errors
+  - `"warning"`: Only warnings
+  - `"log"`: Only regular logs
+- `collapse` (optional, bool, default: false): Collapse duplicates
+- `maxCount` (optional, int, default: 10): Max entries
 
-**Returns**: Formatted string with log statistics and entries (not JSON).
-
-**Example Response**:
+**Returns** (formatted text):
 ```
 📊 日志统计: ❌错误 2 | ⚠️警告 1 | 🟢信息 5
 
-[❌ Error] NullReferenceException: Object reference not set to an instance of an object
+[❌ Error] NullReferenceException: Object reference not set
   Assets/Scripts/GameManager.cs:78
   
 [⚠️ Warning] Shader warning in 'Custom/MyShader': ...
 ```
 
-**Usage Notes**:
-- Retrieves logs from Unity's internal console buffer
-- Does not clear the console
-- Useful after `recompileassemblies` to get compilation errors
-- Returns formatted text with statistics and log entries
-- Use `collapse=true` to hide duplicate messages
+**Notes**:
+- Retrieves from Unity's console buffer
+- Does not clear console
+- Use after `recompileassemblies` for errors
 
 ---
 
-### runcode
+## runcode
 
-**Purpose**: Execute arbitrary static methods in the Unity Editor.
+Execute arbitrary static methods.
 
 **Parameters**:
-- `typeDotMethod` (required, string): Fully-qualified static method name
+- `typeDotMethod` (string): Fully-qualified method name
   - Format: `"Namespace.ClassName.MethodName"`
-  - Method must be public, static, and parameterless
+  - Must be public, static, parameterless
 
-**Returns**: 
-- Method return value (if any)
-- Execution status (success/failure)
-- Error message (if execution failed)
-
-**Example Usage**:
-
+**Examples**:
 ```javascript
-// Refresh asset database
 runcode("UnityEditor.AssetDatabase.Refresh")
-
-// Clear console
 runcode("UnityEditor.LogEntries.Clear")
-
-// Custom editor utility
 runcode("MyNamespace.EditorUtils.RegenerateAllPrefabs")
 ```
 
-**Example Response**:
+**Returns**:
 ```json
 {
   "success": true,
@@ -109,56 +86,54 @@ runcode("MyNamespace.EditorUtils.RegenerateAllPrefabs")
 }
 ```
 
-**Usage Notes**:
-- Method must be accessible from Unity Editor context
-- Cannot pass parameters (use custom wrapper methods if needed)
-- Useful for triggering MenuItem handlers or custom editor utilities
+**Notes**:
+- Method must be accessible from Editor
+- Cannot pass parameters
 - Timeout: 30 seconds
-- Exceptions are caught and returned in error message
+- Exceptions caught and returned
 
-**Common Use Cases**:
-- `UnityEditor.AssetDatabase.Refresh` - Refresh asset database
-- `UnityEditor.AssetDatabase.SaveAssets` - Force save all assets
-- `UnityEditor.Compilation.CompilationPipeline.RequestScriptCompilation` - Alternative compilation trigger
-- Custom `[MenuItem]` handlers (if parameterless)
-
----
-
-## Workflow: Compile and Fix Errors
-
-**Recommended approach**:
-
-1. Check Unity status: `getunitystatus`
-2. If `editor_mcp_ready`, trigger compilation: `recompileassemblies`
-3. If errors returned, fix them in source files
-4. Repeat steps 2-3 until clean
-5. Optionally verify with `getunityconsolelog(filter="error")`
-
-**Basic workflow**:
-
-```
-recompileassemblies
-  ↓
-errors? → fix code → recompileassemblies
-  ↓
-clean → done
-```
+**Common Methods**:
+- `UnityEditor.AssetDatabase.Refresh` - Refresh assets
+- `UnityEditor.AssetDatabase.SaveAssets` - Force save
+- `UnityEditor.Compilation.CompilationPipeline.RequestScriptCompilation` - Trigger compile
 
 ---
 
-## Error Handling
+## Common Workflows
+
+### Compile and Fix Errors
+```
+1. getunitystatus → editor_mcp_ready
+2. recompileassemblies
+3. If errors → fix code → repeat 2
+4. Clean → done
+```
+
+### Check Console After Compilation
+```
+1. recompileassemblies
+2. getunityconsolelog(filter="error")
+```
+
+### Execute Custom Editor Method
+```
+1. runcode("MyNamespace.EditorUtils.MyMethod")
+```
+
+---
+
+## Troubleshooting
 
 **Compilation timeout**:
-- If compilation takes >60s, `recompileassemblies` returns partial results
-- Check `getunitystatus` to see if Unity is responsive
-- If `editor_mcp_unresponsive`, wait or restart Unity
+- Check `getunitystatus`
+- If `editor_mcp_unresponsive`, wait or restart
 
-**MCP service unresponsive**:
-- All code tools require Unity Editor with MCP service running
-- If tools timeout, check `getunitystatus` first
-- See `references/troubleshooting.md` for recovery steps
-
-**Invalid method in runcode**:
-- Returns error with exception details
+**runcode fails**:
 - Verify method is public, static, parameterless
-- Check namespace and class name spelling
+- Check namespace/class spelling
+- Ensure method accessible from Editor
+
+**MCP unresponsive**:
+- All tools require Unity Editor + MCP running
+- Check `getunitystatus` first
+- See `troubleshooting.md` for recovery

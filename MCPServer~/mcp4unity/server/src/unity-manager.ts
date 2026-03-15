@@ -4,10 +4,17 @@ import { spawn, execSync } from "child_process";
 import axios from "axios";
 import { fileURLToPath } from "url";
 
-interface UnityConfig {
-  unityExePath: string;
+interface UnityProjectConfig {
   projectPath: string;
-  mcpPort?: number; // Unity Editor MCP 服务端口，默认 52429
+  unityExePath: string;
+  mcpPort: number;
+}
+
+interface UnityMultiConfig {
+  defaultProject?: string; // 默认项目名称
+  projects: {
+    [projectName: string]: UnityProjectConfig;
+  };
 }
 
 export enum UnityStatus {
@@ -27,144 +34,207 @@ export interface UnityStatusDetail {
 }
 
 export class UnityManager {
-  private config: UnityConfig | null = null;
-  private readonly configFile: string;
+  private multiConfig: UnityMultiConfig | null = null;
+  private configFile: string | null = null;
 
   constructor() {
-    // 配置文件放在 Unity 项目根目录
-    // 从当前工作目录向上查找 Unity 项目根目录
-    const unityProjectRoot = this.findUnityProjectRoot(process.cwd());
-    if (!unityProjectRoot) {
-      throw new Error("Not in a Unity project directory. Please run from a Unity project or specify projectPath.");
-    }
-    this.configFile = path.join(unityProjectRoot, "unity_config.json");
+    // 延迟初始化 configFile，允许从多项目根目录启动
+    // 配置文件统一放在多项目根目录
   }
 
   /**
-   * 查找 Unity 项目根目录（包含 Assets/ 和 ProjectSettings/ 的目录，严格大小写）
-   * @returns Unity 项目根目录路径，如果未找到则返回 null
+   * 查找多项目根目录（包含多个 Unity 项目的父目录）
+   * 从当前目录向上查找，直到找到包含至少一个 Unity 项目的目录
    */
-  private findUnityProjectRoot(startPath: string): string | null {
+  private findMultiProjectRoot(startPath: string): string {
     let currentPath = startPath;
     
-    // 向上查找，直到找到 Unity 项目标志或到达根目录
+    // 向上查找
     while (currentPath !== path.dirname(currentPath)) {
-      const assetsDir = path.join(currentPath, "Assets");
-      const projectSettingsDir = path.join(currentPath, "ProjectSettings");
+      // 检查当前目录是否是 Unity 项目
+      if (this.isUnityProject(currentPath)) {
+        // 如果当前目录就是 Unity 项目，返回其父目录作为多项目根目录
+        return path.dirname(currentPath);
+      }
       
-      // 检查是否同时存在 Assets 和 ProjectSettings 目录（严格大小写）
-      if (fs.existsSync(assetsDir) && fs.existsSync(projectSettingsDir)) {
-        // 验证大小写是否正确
-        try {
-          const files = fs.readdirSync(currentPath);
-          if (files.includes("Assets") && files.includes("ProjectSettings")) {
-            return currentPath;
-          }
-        } catch (error) {
-          // 忽略读取错误，继续向上查找
+      // 检查当前目录的子目录是否包含 Unity 项目
+      try {
+        const entries = fs.readdirSync(currentPath, { withFileTypes: true });
+        const hasUnityProjects = entries.some(entry => 
+          entry.isDirectory() && this.isUnityProject(path.join(currentPath, entry.name))
+        );
+        
+        if (hasUnityProjects) {
+          return currentPath;
         }
+      } catch (error) {
+        // 忽略读取错误，继续向上查找
       }
       
       currentPath = path.dirname(currentPath);
     }
     
-    // 如果没找到 Unity 项目，返回 null
-    return null;
+    // 如果没找到，返回当前工作目录
+    return process.cwd();
   }
 
   /**
-   * 加载配置
+   * 检查目录是否是 Unity 项目（包含 Assets/ 和 ProjectSettings/，严格大小写）
    */
-  private loadConfig(): UnityConfig {
-    if (this.config) {
-      return this.config;
+  private isUnityProject(dirPath: string): boolean {
+    try {
+      const files = fs.readdirSync(dirPath);
+      return files.includes("Assets") && files.includes("ProjectSettings");
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * 获取配置文件路径（延迟初始化）
+   */
+  private getConfigFile(): string {
+    if (this.configFile) {
+      return this.configFile;
     }
 
-    if (fs.existsSync(this.configFile)) {
+    // 查找多项目根目录
+    const multiProjectRoot = this.findMultiProjectRoot(process.cwd());
+    this.configFile = path.join(multiProjectRoot, "unity_config.json");
+    return this.configFile;
+  }
+
+  /**
+   * 加载多项目配置
+   */
+  private loadMultiConfig(): UnityMultiConfig {
+    if (this.multiConfig) {
+      return this.multiConfig;
+    }
+
+    const configFile = this.getConfigFile();
+    if (fs.existsSync(configFile)) {
       try {
-        const content = fs.readFileSync(this.configFile, "utf-8");
-        this.config = JSON.parse(content);
-        return this.config!;
+        const content = fs.readFileSync(configFile, "utf-8");
+        this.multiConfig = JSON.parse(content);
+        return this.multiConfig!;
       } catch (error) {
         console.error("[UnityManager] Failed to parse config:", error);
       }
     }
 
-    // 默认配置
-    this.config = {
-      unityExePath: "",
-      projectPath: process.cwd(),
-    };
-    return this.config;
+    // 返回空配置
+    this.multiConfig = { projects: {} };
+    return this.multiConfig;
   }
 
   /**
-   * 保存配置
+   * 获取指定项目的配置（支持项目名或项目路径）
    */
-  saveConfig(unityExePath: string, projectPath?: string, mcpPort?: number): void {
-    const targetProjectPath = projectPath || this.findUnityProjectRoot(process.cwd());
+  private getProjectConfig(projectPathOrName: string): UnityProjectConfig {
+    const multiConfig = this.loadMultiConfig();
     
-    if (!targetProjectPath) {
-      throw new Error("Unity project not found. Please specify projectPath parameter or run from a Unity project directory.");
+    // 先尝试作为项目名查找
+    if (multiConfig.projects[projectPathOrName]) {
+      return multiConfig.projects[projectPathOrName];
     }
     
-    // 加载现有配置以保留 mcpPort（如果已存在）
-    const targetConfigFile = path.join(targetProjectPath, "unity_config.json");
-    let existingConfig: Partial<UnityConfig> = {};
-    if (fs.existsSync(targetConfigFile)) {
-      try {
-        existingConfig = JSON.parse(fs.readFileSync(targetConfigFile, "utf-8"));
-      } catch (error) {
-        // 忽略解析错误，使用新配置
+    // 尝试作为路径查找
+    const normalizedPath = path.resolve(projectPathOrName);
+    for (const [name, config] of Object.entries(multiConfig.projects)) {
+      if (path.resolve(config.projectPath) === normalizedPath) {
+        return config;
       }
     }
     
-    this.config = {
-      unityExePath,
-      projectPath: targetProjectPath,
-      mcpPort: mcpPort ?? existingConfig.mcpPort ?? 52429, // 优先使用传入值，其次现有值，最后默认值
-    };
+    throw new Error(`Project not configured: ${projectPathOrName}. Please edit unity_config.json manually.`);
+  }
 
-    fs.writeFileSync(
-      targetConfigFile,
-      JSON.stringify(this.config, null, 2),
-      "utf-8"
-    );
+  /**
+   * 解析项目路径（支持项目名、相对路径、绝对路径）
+   */
+  private resolveProjectPath(projectPathOrName?: string): string {
+    const multiConfig = this.loadMultiConfig();
     
-    // 更新实例的 configFile 路径
-    (this as any).configFile = targetConfigFile;
+    if (!projectPathOrName) {
+      // 尝试使用默认项目
+      if (multiConfig.defaultProject) {
+        const defaultConfig = multiConfig.projects[multiConfig.defaultProject];
+        if (defaultConfig) {
+          return path.resolve(defaultConfig.projectPath);
+        }
+      }
+
+      // 从当前目录向上查找 Unity 项目
+      let currentPath = process.cwd();
+      while (currentPath !== path.dirname(currentPath)) {
+        if (this.isUnityProject(currentPath)) {
+          return currentPath;
+        }
+        currentPath = path.dirname(currentPath);
+      }
+      throw new Error("Not in a Unity project directory. Please specify projectPath parameter or set a default project.");
+    }
+
+    // 尝试作为项目名查找
+    if (multiConfig.projects[projectPathOrName]) {
+      return path.resolve(multiConfig.projects[projectPathOrName].projectPath);
+    }
+
+    // 如果是绝对路径，直接返回
+    if (path.isAbsolute(projectPathOrName)) {
+      return path.resolve(projectPathOrName);
+    }
+
+    // 尝试作为相对路径解析
+    const relativePath = path.resolve(process.cwd(), projectPathOrName);
+    if (this.isUnityProject(relativePath)) {
+      return relativePath;
+    }
+
+    // 尝试从多项目根目录解析
+    const multiProjectRoot = this.findMultiProjectRoot(process.cwd());
+    const fromRoot = path.resolve(multiProjectRoot, projectPathOrName);
+    if (this.isUnityProject(fromRoot)) {
+      return fromRoot;
+    }
+
+    throw new Error(`Unity project not found: ${projectPathOrName}`);
+  }
+
+  /**
+   * 保存配置（已废弃）
+   */
+  saveConfig(unityExePath: string, projectPath?: string, mcpPort?: number, setAsDefault?: boolean): void {
+    throw new Error("saveConfig has been removed. Please manually edit unity_config.json.");
   }
 
   /**
    * 获取配置文件路径
    */
   getConfigPath(): string {
-    return this.configFile;
+    return this.getConfigFile();
   }
 
   /**
    * 获取项目路径
    */
-  private getProjectPath(): string {
-    const config = this.loadConfig();
-    if (config.projectPath && config.projectPath !== process.cwd()) {
-      return config.projectPath;
-    }
-    
-    // 如果配置的路径就是当前目录，尝试向上查找项目根目录
-    let current = process.cwd();
-    for (let i = 0; i < 5; i++) {
-      const assetsPath = path.join(current, "Assets");
-      const libraryPath = path.join(current, "Library");
-      if (fs.existsSync(assetsPath) && fs.existsSync(libraryPath)) {
-        return current;
-      }
-      const parent = path.dirname(current);
-      if (parent === current) break;
-      current = parent;
-    }
-    
-    return config.projectPath || process.cwd();
+  private getProjectPath(projectPath?: string): string {
+    return this.resolveProjectPath(projectPath);
+  }
+  
+  /**
+   * 公共方法：解析项目路径（供外部调用）
+   */
+  resolveProjectPathPublic(projectPathOrName?: string): string {
+    return this.resolveProjectPath(projectPathOrName);
+  }
+  
+  /**
+   * 获取默认项目路径
+   */
+  getDefaultProjectPath(): string {
+    return this.resolveProjectPath();
   }
 
   /**
@@ -236,22 +306,20 @@ export class UnityManager {
   }
 
   /**
-   * 检查 MCP 端点文件是否存在且有效
+   * 检查 MCP 端点文件是否存在且进程存活
    */
-  private mcpEndpointExists(): boolean {
-    const endpoint = this.readMcpEndpoint();
-    if (!endpoint) {
-      return false;
-    }
-
-    // 如果端点文件包含 PID，验证进程是否存活
-    const projectPath = this.getProjectPath();
+  private mcpEndpointExists(projectPath?: string): boolean {
+    const targetProjectPath = this.getProjectPath(projectPath);
     const endpointFile = path.join(
-      projectPath,
+      targetProjectPath,
       "Library",
       "MCP4Unity",
       "mcp_endpoint.json"
     );
+
+    if (!fs.existsSync(endpointFile)) {
+      return false;
+    }
 
     try {
       const content = fs.readFileSync(endpointFile, "utf-8");
@@ -262,20 +330,64 @@ export class UnityManager {
         return this.isProcessAlive(pid);
       }
     } catch (error) {
-      // 无法读取或解析，认为无效
       return false;
     }
 
-    return true;
+    return false;
   }
 
   /**
-   * 读取 MCP 端点配置
+   * 读取 MCP 心跳文件
    */
-  private readMcpEndpoint(): { port: number; url: string } | null {
-    const projectPath = this.getProjectPath();
+  private readMcpAlive(projectPath?: string): { port: number; lastHeartbeat: Date; connectedClients: string[] } | null {
+    const targetProjectPath = this.getProjectPath(projectPath);
+    const aliveFile = path.join(
+      targetProjectPath,
+      "Library",
+      "MCP4Unity",
+      "mcp_alive.json"
+    );
+
+    if (!fs.existsSync(aliveFile)) {
+      return null;
+    }
+
+    try {
+      const content = fs.readFileSync(aliveFile, "utf-8");
+      const data = JSON.parse(content);
+      const stats = fs.statSync(aliveFile);
+      
+      return {
+        port: data.Port || data.port,
+        lastHeartbeat: stats.mtime,
+        connectedClients: data.ConnectedClients || data.connectedClients || [],
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * 检查 MCP 心跳是否有效（3秒内有更新）
+   */
+  private isMcpAlive(projectPath?: string): boolean {
+    const alive = this.readMcpAlive(projectPath);
+    if (!alive) {
+      return false;
+    }
+
+    const now = new Date();
+    const timeSinceLastHeartbeat = now.getTime() - alive.lastHeartbeat.getTime();
+    return timeSinceLastHeartbeat < 3000; // 3秒超时
+  }
+
+  /**
+   * 读取 MCP 端点配置（已废弃，保留用于兼容）
+   */
+  private readMcpEndpoint(projectPath?: string): { port: number; url: string } | null {
+    const targetProjectPath = this.getProjectPath(projectPath);
     const endpointFile = path.join(
-      projectPath,
+      targetProjectPath,
       "Library",
       "MCP4Unity",
       "mcp_endpoint.json"
@@ -299,20 +411,28 @@ export class UnityManager {
   }
 
   /**
-   * 测试 MCP 服务是否响应
+   * 测试 MCP 服务是否响应（心跳 + HTTP 都要通过）
    */
-  private async testMcpResponsive(): Promise<boolean> {
-    const endpoint = this.readMcpEndpoint();
-    if (!endpoint) {
+  private async testMcpResponsive(projectPath?: string): Promise<boolean> {
+    // 1. 首先检查心跳文件
+    if (!this.isMcpAlive(projectPath)) {
       return false;
     }
 
+    // 2. 心跳有效，再测试 HTTP 连接
+    const alive = this.readMcpAlive(projectPath);
+    if (!alive) {
+      return false;
+    }
+
+    const url = `http://127.0.0.1:${alive.port}/mcp/`;
+
     try {
       const response = await axios.post(
-        endpoint.url,
+        url,
         {
           method: "listtools",
-          params: null,
+          params: {},
         },
         {
           timeout: 3000,
@@ -328,9 +448,10 @@ export class UnityManager {
   /**
    * 获取详细的 Unity 状态
    */
-  async getUnityStatus(): Promise<UnityStatusDetail> {
+  async getUnityStatus(projectPath?: string): Promise<UnityStatusDetail> {
+    const targetProjectPath = this.getProjectPath(projectPath);
     const processRunning = this.isUnityProcessRunning();
-    const endpointExists = this.mcpEndpointExists();
+    const endpointExists = this.mcpEndpointExists(projectPath);
     const batchMode = processRunning ? this.isUnityBatchMode() : false;
 
     // 未启动
@@ -357,7 +478,7 @@ export class UnityManager {
       };
     }
 
-    // Editor 模式但 MCP 端点不存在
+    // Editor 模式但 MCP 端点不存在（进程未启动或已死亡）
     if (!endpointExists) {
       return {
         status: UnityStatus.EDITOR_MCP_UNRESPONSIVE,
@@ -370,8 +491,8 @@ export class UnityManager {
       };
     }
 
-    // Editor 模式，端点存在，测试响应
-    const mcpResponsive = await this.testMcpResponsive();
+    // Editor 模式，端点存在，测试 MCP 响应（心跳 + HTTP）
+    const mcpResponsive = await this.testMcpResponsive(projectPath);
 
     if (mcpResponsive) {
       return {
@@ -383,10 +504,15 @@ export class UnityManager {
         batchMode: false,
       };
     } else {
+      // 区分心跳超时和 HTTP 失败
+      const alive = this.isMcpAlive(projectPath);
+      const message = alive
+        ? "Unity Editor is running, heartbeat active, but HTTP unresponsive (network issue or service restarting)"
+        : "Unity Editor is running but MCP service heartbeat timeout (>3s) - may be compiling, loading, or main thread blocked";
+      
       return {
         status: UnityStatus.EDITOR_MCP_UNRESPONSIVE,
-        message:
-          "Unity Editor is running but MCP service is unresponsive (may be compiling, loading, or main thread blocked)",
+        message,
         processRunning: true,
         endpointExists: true,
         mcpResponsive: false,
@@ -398,20 +524,20 @@ export class UnityManager {
   /**
    * 启动 Unity
    */
-  startUnity(): void {
-    const config = this.loadConfig();
+  startUnity(projectPath?: string): void {
+    const targetProjectPath = this.getProjectPath(projectPath);
+    const config = this.getProjectConfig(targetProjectPath);
+    
     if (!config.unityExePath) {
       throw new Error(
         "Unity path not configured. Use configureunity first."
       );
     }
 
-    const projectPath = this.getProjectPath();
-
     // 使用 spawn 启动 Unity（跨平台兼容）
     // 添加参数跳过各种阻塞对话框
     const args = [
-      "-projectPath", projectPath,
+      "-projectPath", targetProjectPath,
       "-disable-assembly-updater",  // 跳过程序集更新器
       "-accept-apiupdate",           // 自动接受 API 更新
       "-silent-crashes",             // 跳过崩溃恢复对话框
@@ -457,9 +583,9 @@ export class UnityManager {
   /**
    * 删除场景备份文件
    */
-  deleteSceneBackups(): void {
-    const projectPath = this.getProjectPath();
-    const backupPath = path.join(projectPath, "Temp", "__Backupscenes");
+  deleteSceneBackups(projectPath?: string): void {
+    const targetProjectPath = this.getProjectPath(projectPath);
+    const backupPath = path.join(targetProjectPath, "Temp", "__Backupscenes");
 
     if (fs.existsSync(backupPath)) {
       fs.rmSync(backupPath, { recursive: true, force: true });
@@ -469,9 +595,9 @@ export class UnityManager {
   /**
    * 删除 ScriptAssemblies 缓存
    */
-  deleteScriptAssemblies(): void {
-    const projectPath = this.getProjectPath();
-    const assemblyPath = path.join(projectPath, "Library", "ScriptAssemblies");
+  deleteScriptAssemblies(projectPath?: string): void {
+    const targetProjectPath = this.getProjectPath(projectPath);
+    const assemblyPath = path.join(targetProjectPath, "Library", "ScriptAssemblies");
 
     if (fs.existsSync(assemblyPath)) {
       fs.rmSync(assemblyPath, { recursive: true, force: true });
@@ -482,9 +608,9 @@ export class UnityManager {
    * 运行 Unity batchmode 编译
    * 返回结构化的编译结果
    */
-  runBatchMode(): string {
-    const config = this.loadConfig();
-    const projectPath = this.getProjectPath();
+  runBatchMode(projectPath?: string): string {
+    const targetProjectPath = this.getProjectPath(projectPath);
+    const config = this.getProjectConfig(targetProjectPath);
 
     if (!config.unityExePath) {
       throw new Error("Unity path not configured. Run configureunity first.");
@@ -495,7 +621,7 @@ export class UnityManager {
     }
 
     // 使用项目特定的日志文件路径，避免多项目混杂
-    const logDir = path.join(projectPath, "Logs");
+    const logDir = path.join(targetProjectPath, "Logs");
     if (!fs.existsSync(logDir)) {
       fs.mkdirSync(logDir, { recursive: true });
     }
@@ -506,7 +632,7 @@ export class UnityManager {
 
     try {
       execSync(
-        `"${config.unityExePath}" -batchmode -projectPath "${projectPath}" -quit -logFile "${logFile}"`,
+        `"${config.unityExePath}" -batchmode -projectPath "${targetProjectPath}" -quit -logFile "${logFile}"`,
         {
           encoding: "utf-8",
           timeout: 180000, // 3 分钟超时

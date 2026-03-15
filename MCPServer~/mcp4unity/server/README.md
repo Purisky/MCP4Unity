@@ -29,16 +29,22 @@ AI Agent (stdio) ─► Node.js MCP Server ─► HTTP ─► Unity Editor (MCPS
 
 ## Configuration
 
-Unity paths are stored in `../unity_config.json` (created by `configureunity` tool):
+Unity paths are stored in `unity_config.json` in the multi-project root directory:
 
 ```json
 {
-  "unityExePath": "/path/to/Unity.exe",
-  "projectPath": "/path/to/unity/project"
+  "defaultProject": "ProjectA",
+  "projects": {
+    "ProjectA": {
+      "projectPath": "C:\\Path\\To\\ProjectA",
+      "unityExePath": "C:\\Path\\To\\Unity\\Editor\\Unity.exe",
+      "mcpPort": 52429
+    }
+  }
 }
 ```
 
-The `projectPath` is optional and will be auto-detected by searching upward from the current directory for a folder containing `Assets/` and `Library/`.
+The server automatically resolves project paths by name or uses the `defaultProject` when no project is specified.
 
 ## Development
 

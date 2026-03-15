@@ -27,10 +27,20 @@ interface UnityToolDefinition {
   }>;
 }
 
+interface UnityMultiConfig {
+  defaultProject?: string;
+  projects: {
+    [key: string]: {
+      projectPath: string;
+      unityExePath: string;
+      mcpPort: number;
+    };
+  };
+}
+
 export class UnityClient {
   private httpClient: AxiosInstance;
-  private cachedUrl: string | null = null;
-  private readonly defaultPort = 8080;
+  private readonly defaultPort = 52429;
 
   constructor() {
     this.httpClient = axios.create({
@@ -40,56 +50,71 @@ export class UnityClient {
   }
 
   /**
+   * 从配置文件读取项目的端口号
+   */
+  private getPortFromConfig(projectPath: string): number {
+    try {
+      // 向上查找 unity_config.json
+      let currentPath = projectPath;
+      while (currentPath) {
+        const configPath = path.join(currentPath, "unity_config.json");
+        if (fs.existsSync(configPath)) {
+          const content = fs.readFileSync(configPath, "utf-8");
+          const config: UnityMultiConfig = JSON.parse(content);
+          
+          // 遍历所有项目，匹配当前项目路径
+          if (config.projects) {
+            for (const projectConfig of Object.values(config.projects)) {
+              const normalizedConfigPath = path.resolve(projectConfig.projectPath);
+              const normalizedProjectPath = path.resolve(projectPath);
+              
+              if (normalizedConfigPath === normalizedProjectPath) {
+                console.error(`[UnityClient] Found port ${projectConfig.mcpPort} for project ${projectPath}`);
+                return projectConfig.mcpPort;
+              }
+            }
+          }
+        }
+        
+        const parentPath = path.dirname(currentPath);
+        if (parentPath === currentPath) break;
+        currentPath = parentPath;
+      }
+    } catch (error) {
+      console.error("[UnityClient] Failed to read config:", error);
+    }
+    
+    console.error(`[UnityClient] No config found for ${projectPath}, using default port ${this.defaultPort}`);
+    return this.defaultPort;
+  }
+
+  /**
    * 解析 Unity MCP 服务的 URL
    */
-  private async resolveUnityMcpUrl(): Promise<string> {
-    if (this.cachedUrl) {
-      return this.cachedUrl;
-    }
-
-    const projectPath = process.cwd();
-    const endpointFile = path.join(
-      projectPath,
-      "Library",
-      "MCP4Unity",
-      "mcp_endpoint.json"
-    );
-
-    // 尝试读取端点配置文件
-    if (fs.existsSync(endpointFile)) {
-      try {
-        const content = fs.readFileSync(endpointFile, "utf-8");
-        const endpoint: McpEndpoint = JSON.parse(content);
-        this.cachedUrl = endpoint.url;
-        console.error(`[UnityClient] Resolved URL from config: ${this.cachedUrl}`);
-        return this.cachedUrl;
-      } catch (error) {
-        console.error("[UnityClient] Failed to parse endpoint file:", error);
-      }
-    }
-
-    // 回退到默认端口
-    this.cachedUrl = `http://127.0.0.1:${this.defaultPort}/mcp/`;
-    console.error(`[UnityClient] Using fallback URL: ${this.cachedUrl}`);
-    return this.cachedUrl;
+  private resolveUnityMcpUrl(projectPath: string): string {
+    const port = this.getPortFromConfig(projectPath);
+    const url = `http://127.0.0.1:${port}/mcp/`;
+    console.error(`[UnityClient] Using URL: ${url}`);
+    return url;
   }
 
   /**
    * 调用 Unity MCP 服务
    */
   private async callUnityMcpService(
+    projectPath: string,
     method: string,
     parameters?: Record<string, unknown>
   ): Promise<string> {
-    console.error(`[UnityClient] Calling Unity: method=${method}`);
+    console.error(`[UnityClient] Calling Unity: method=${method}, project=${projectPath}`);
 
     try {
-      const url = await this.resolveUnityMcpUrl();
+      const url = this.resolveUnityMcpUrl(projectPath);
       console.error(`[UnityClient] Resolved URL: ${url}`);
 
       const request = {
         method,
-        params: parameters ? JSON.stringify(parameters) : null,
+        params: parameters || {},
       };
 
       const response = await this.httpClient.post<McpResponse>(url, request, {
@@ -99,7 +124,6 @@ export class UnityClient {
       });
 
       if (response.status !== 200) {
-        this.cachedUrl = null;
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
@@ -110,9 +134,6 @@ export class UnityClient {
 
       return mcpResponse.result;
     } catch (error) {
-      // 清除缓存 URL，下次重新解析
-      this.cachedUrl = null;
-      
       if (axios.isAxiosError(error)) {
         if (error.code === "ECONNREFUSED") {
           throw new Error(
@@ -141,9 +162,9 @@ export class UnityClient {
   /**
    * 列出 Unity 侧的所有工具
    */
-  async listTools(): Promise<Tool[]> {
+  async listTools(projectPath: string): Promise<Tool[]> {
     try {
-      const result = await this.callUnityMcpService("listtools");
+      const result = await this.callUnityMcpService(projectPath, "listtools");
       const unityTools: UnityToolDefinition[] = JSON.parse(result);
 
       return unityTools.map((tool) => this.convertUnityToolToMcpTool(tool));
@@ -158,11 +179,12 @@ export class UnityClient {
    * 调用 Unity 侧的工具
    */
   async callTool(
+    projectPath: string,
     name: string,
     args: Record<string, unknown>
   ): Promise<string> {
     try {
-      return await this.callUnityMcpService("calltool", {
+      return await this.callUnityMcpService(projectPath, "calltool", {
         name,
         arguments: args,
       });

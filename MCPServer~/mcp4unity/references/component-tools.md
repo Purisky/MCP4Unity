@@ -1,138 +1,112 @@
 # Component Tools Reference
 
-Component tools handle GameObject component inspection and property manipulation via Unity's SerializedObject API.
+Component inspection and property manipulation via Unity's SerializedObject API.
 
-## Available Tools
+## getcomponents
 
-### getcomponents
-
-**Purpose**: List all components attached to a GameObject.
+List all components on a GameObject.
 
 **Parameters**:
-- `name` (required, string): GameObject name or hierarchy path
-  - Simple name: `"Player"`
-  - Hierarchy path: `"Canvas/Panel/Button"`
+- `name` (string): GameObject name or path (`"Player"` or `"Canvas/Panel/Button"`)
 
-**Returns**: Array of components with type names and enabled/disabled state.
-
-**Example Response**:
+**Returns**:
 ```json
 {
   "gameObject": "Player",
   "components": [
     {"type": "Transform", "enabled": true},
     {"type": "Rigidbody", "enabled": true},
-    {"type": "CapsuleCollider", "enabled": true},
-    {"type": "PlayerController", "enabled": true},
-    {"type": "Animator", "enabled": false}
+    {"type": "PlayerController", "enabled": true}
   ]
 }
 ```
 
-**Usage Notes**:
-- All GameObjects have at least a Transform component
-- `enabled` state only applies to MonoBehaviour components
-- Transform and other non-MonoBehaviour components always show `enabled: true`
-- Use hierarchy paths for nested objects
+**Notes**:
+- All GameObjects have Transform
+- `enabled` only applies to MonoBehaviour
 
 ---
 
-### getserializedproperties
+## getserializedproperties
 
-**Purpose**: Get all serialized properties of a specific component using Unity's SerializedObject API.
+Get all serialized properties of a component.
 
 **Parameters**:
-- `name` (required, string): GameObject name or hierarchy path
-- `componentNameOrIndex` (required, string): Component type name or index
-  - Type name: `"Rigidbody"`, `"PlayerController"`
-  - Index: `"0"`, `"1"`, `"2"` (from getcomponents list)
+- `name` (string): GameObject name or path
+- `componentNameOrIndex` (string): Component type (`"Rigidbody"`) or index (`"0"`)
 
-**Returns**: Array of serialized properties with names, types, and current values.
-
-**Example Response** (Rigidbody):
+**Returns**:
 ```json
 {
   "gameObject": "Player",
   "component": "Rigidbody",
   "properties": [
     {"name": "m_Mass", "type": "float", "value": 1.0},
-    {"name": "m_Drag", "type": "float", "value": 0.0},
-    {"name": "m_AngularDrag", "type": "float", "value": 0.05},
     {"name": "m_UseGravity", "type": "bool", "value": true},
-    {"name": "m_IsKinematic", "type": "bool", "value": false},
-    {"name": "m_Interpolate", "type": "enum", "value": "None"},
-    {"name": "m_Constraints", "type": "enum", "value": "None"}
-  ]
-}
-```
-
-**Example Response** (Custom Script):
-```json
-{
-  "gameObject": "Player",
-  "component": "PlayerController",
-  "properties": [
-    {"name": "moveSpeed", "type": "float", "value": 5.0},
-    {"name": "jumpForce", "type": "float", "value": 10.0},
-    {"name": "maxHealth", "type": "int", "value": 100},
-    {"name": "currentHealth", "type": "int", "value": 100},
-    {"name": "isGrounded", "type": "bool", "value": true},
-    {"name": "playerName", "type": "string", "value": "Hero"},
-    {"name": "weapon", "type": "ObjectReference", "value": "Sword (GameObject)"}
+    {"name": "m_Interpolate", "type": "enum", "value": "None"}
   ]
 }
 ```
 
 **Property Types**:
 - Primitives: `int`, `float`, `bool`, `string`
-- Unity types: `Vector2`, `Vector3`, `Color`, `Rect`
+- Unity: `Vector2`, `Vector3`, `Color`, `Rect`
 - References: `ObjectReference` (GameObject, Component, Asset)
 - Collections: `Array`, `List`
-- Enums: `enum` (shows current value as string)
+- Enums: `enum` (shows current value)
 
-**Usage Notes**:
-- Only shows serialized fields (public or `[SerializeField]` private)
-- Property names use Unity's internal naming (often prefixed with `m_`)
-- Use component index for faster access if you already called `getcomponents`
-- ObjectReference values show type and name: `"Sword (GameObject)"`
+**Notes**:
+- Only serialized fields (public or `[SerializeField]`)
+- Names use Unity internal format (often `m_` prefix)
+- Use index for faster access
 
 ---
 
-### setserializedproperty
+## setserializedproperty
 
-**Purpose**: Modify a serialized property value on a component.
+Modify a serialized property value.
 
 **Parameters**:
-- `name` (required, string): GameObject name or hierarchy path
-- `componentNameOrIndex` (required, string): Component type name or index
-- `propertyName` (required, string): Property name (from getserializedproperties)
-- `value` (required, string): New value (type-appropriate format)
+- `name` (string): GameObject name or path
+- `componentNameOrIndex` (string): Component type or index
+- `propertyName` (string): Property name (from getserializedproperties)
+- `value` (string): New value (type-appropriate format)
 
-**Returns**: Success status and updated property info.
-
-**Example Usage**:
-
+**Examples**:
 ```javascript
-// Set float property
+// Float
 setserializedproperty("Player", "Rigidbody", "m_Mass", "2.5")
 
-// Set bool property
+// Bool
 setserializedproperty("Player", "PlayerController", "isGrounded", "false")
 
-// Set int property
+// Int
 setserializedproperty("Enemy", "HealthSystem", "maxHealth", "150")
 
-// Set string property
-setserializedproperty("Player", "PlayerController", "playerName", "NewHero")
+// String
+setserializedproperty("Player", "PlayerController", "playerName", "Hero")
 
-// Set enum property (by name)
+// Enum (by name)
 setserializedproperty("Player", "Rigidbody", "m_Interpolate", "Interpolate")
 
-// Set Vector3 property
+// Vector3
 setserializedproperty("Player", "Transform", "m_LocalPosition", "0,1,0")
+
+// Color
+setserializedproperty("Sprite", "SpriteRenderer", "m_Color", "1,0,0,1")
 ```
 
-**Example Response**:
+**Value Formats**:
+- `float`: `"1.5"`, `"0.0"`, `"-3.14"`
+- `int`: `"100"`, `"0"`, `"-50"`
+- `bool`: `"true"`, `"false"`
+- `string`: `"any text"`
+- `enum`: `"EnumValueName"`
+- `Vector2`: `"x,y"` → `"1.5,2.0"`
+- `Vector3`: `"x,y,z"` → `"0,1,0"`
+- `Color`: `"r,g,b,a"` → `"1,0,0,1"` (values 0-1)
+
+**Returns**:
 ```json
 {
   "success": true,
@@ -144,141 +118,112 @@ setserializedproperty("Player", "Transform", "m_LocalPosition", "0,1,0")
 }
 ```
 
-**Value Format by Type**:
-- `float`: `"1.5"`, `"0.0"`, `"-3.14"`
-- `int`: `"100"`, `"0"`, `"-50"`
-- `bool`: `"true"`, `"false"`
-- `string`: `"any text"`
-- `Vector2`: `"x,y"` → `"1.0,2.0"`
-- `Vector3`: `"x,y,z"` → `"1.0,2.0,3.0"`
-- `Color`: `"r,g,b,a"` → `"1.0,0.0,0.0,1.0"` (red)
-- `enum`: enum value name as string → `"Interpolate"`
-- `ObjectReference`: Asset path or GameObject name → `"Assets/Prefabs/Sword.prefab"`
-
-**Usage Notes**:
-- Changes are applied immediately in the Editor
-- Scene must be saved to persist changes
-- Invalid values return error with type mismatch details
-- ObjectReference requires valid asset path or GameObject name
-- Use `ApplyModifiedProperties()` internally (automatic)
+**Notes**:
+- Changes apply immediately
+- Scene marked dirty automatically
+- Use `savescene()` to persist
 
 ---
 
-## Hierarchy Tools
+## createobject
 
-### createobject
-
-**Purpose**: Create a new GameObject in the scene.
+Create a new GameObject.
 
 **Parameters**:
-- `name` (required, string): Name for the new GameObject
-- `parent` (optional, string): Parent GameObject name or path (empty = root)
+- `name` (string): GameObject name
+- `parent` (string, optional): Parent path (empty = root)
 
-**Returns**: Created GameObject info with path.
-
-**Example Usage**:
-
+**Examples**:
 ```javascript
-// Create root object
-createobject("NewObject")
-
-// Create child object
-createobject("ChildObject", "Parent")
-
-// Create nested child
-createobject("Button", "Canvas/Panel")
+createobject("Enemy")  // Root level
+createobject("Bullet", "Player/Weapons")  // Under parent
 ```
 
-**Example Response**:
+**Returns**:
 ```json
 {
   "success": true,
-  "name": "NewObject",
-  "path": "NewObject",
+  "name": "Enemy",
+  "path": "Enemy",
   "parent": null
 }
 ```
 
 ---
 
-### deleteobject
+## deleteobject
 
-**Purpose**: Delete a GameObject from the scene.
+Delete a GameObject.
 
 **Parameters**:
-- `name` (required, string): GameObject name or hierarchy path
+- `name` (string): GameObject name or path
 
-**Returns**: Success status.
+**Example**:
+```javascript
+deleteobject("Enemy")
+deleteobject("Canvas/Panel/OldButton")
+```
 
-**Example Response**:
+**Returns**:
 ```json
 {
   "success": true,
-  "deleted": "OldObject"
+  "deleted": "Enemy"
 }
 ```
 
-**Usage Notes**:
-- Deletes GameObject and all children
-- Cannot be undone via MCP (use Unity's Undo in Editor)
-- Scene must be saved to persist deletion
+**Notes**:
+- Deletes object and all children
+- Cannot be undone via MCP
 
 ---
 
-### addcomponent
+## addcomponent
 
-**Purpose**: Add a component to a GameObject.
+Add a component to a GameObject.
 
 **Parameters**:
-- `name` (required, string): GameObject name or hierarchy path
-- `componentType` (required, string): Fully-qualified component type name
-  - Built-in: `"UnityEngine.Rigidbody"`, `"UnityEngine.BoxCollider"`
-  - Custom: `"MyNamespace.PlayerController"`
+- `name` (string): GameObject name or path
+- `componentType` (string): Component type name
 
-**Returns**: Success status and component info.
-
-**Example Usage**:
-
+**Examples**:
 ```javascript
-// Add built-in component
-addcomponent("Player", "UnityEngine.Rigidbody")
-
-// Add custom script
-addcomponent("Enemy", "GameScripts.EnemyAI")
-
-// Add UI component
-addcomponent("Canvas/Panel", "UnityEngine.UI.Image")
+addcomponent("Player", "Rigidbody")
+addcomponent("Enemy", "BoxCollider")
+addcomponent("Player", "MyNamespace.CustomScript")
 ```
 
-**Example Response**:
+**Returns**:
 ```json
 {
   "success": true,
   "gameObject": "Player",
-  "component": "Rigidbody",
-  "fullType": "UnityEngine.Rigidbody"
+  "component": "Rigidbody"
 }
 ```
 
-**Usage Notes**:
-- Component type must exist and be accessible
-- Cannot add duplicate components (except for some types like AudioSource)
-- Some components have dependencies (e.g., Rigidbody requires Collider for physics)
-- Use fully-qualified names to avoid ambiguity
+**Notes**:
+- Component type must exist in project
+- Use full namespace for custom scripts
+- Some components require others (e.g., Collider needs Rigidbody for physics)
 
 ---
 
-### removecomponent
+## removecomponent
 
-**Purpose**: Remove a component from a GameObject.
+Remove a component from a GameObject.
 
 **Parameters**:
-- `name` (required, string): GameObject name or hierarchy path
-- `componentNameOrIndex` (required, string): Component type name or index
+- `name` (string): GameObject name or path
+- `componentNameOrIndex` (string): Component type or index
 
-**Returns**: Success status.
+**Examples**:
+```javascript
+removecomponent("Player", "Rigidbody")
+removecomponent("Enemy", "1")  // Remove second component
+```
 
-**Example Response**:
+**Returns**:
 ```json
 {
   "success": true,
@@ -287,56 +232,117 @@ addcomponent("Canvas/Panel", "UnityEngine.UI.Image")
 }
 ```
 
-**Usage Notes**:
-- Cannot remove Transform (required component)
+**Notes**:
+- Cannot remove Transform (required)
 - Cannot be undone via MCP
-- Scene must be saved to persist removal
 
 ---
 
-## Workflow: Inspect and Modify Components
+## setparent
 
-**Typical workflow**:
+Set GameObject parent.
 
-1. List components: `getcomponents("Player")`
-2. Inspect properties: `getserializedproperties("Player", "Rigidbody")`
-3. Modify property: `setserializedproperty("Player", "Rigidbody", "m_Mass", "2.5")`
-4. Save scene: `savescene()`
+**Parameters**:
+- `name` (string): GameObject name or path
+- `parent` (string): Parent path (empty = root)
 
-**Example: Configure Rigidbody**:
-
+**Examples**:
+```javascript
+setparent("Bullet", "Player/Weapons")  // Set parent
+setparent("Bullet", "")  // Move to root
 ```
-getcomponents("Player")
-  ↓
-getserializedproperties("Player", "Rigidbody")
-  ↓
-setserializedproperty("Player", "Rigidbody", "m_Mass", "2.0")
-setserializedproperty("Player", "Rigidbody", "m_Drag", "0.5")
-setserializedproperty("Player", "Rigidbody", "m_UseGravity", "true")
-  ↓
-savescene()
+
+**Returns**:
+```json
+{
+  "success": true,
+  "gameObject": "Bullet",
+  "newParent": "Player/Weapons"
+}
 ```
 
 ---
 
-## Tips and Best Practices
+## Common Workflows
 
-**Property inspection**:
-- Use `getcomponents` first to see what's available
-- Use component index for faster repeated access
-- Property names often have `m_` prefix (Unity internal naming)
+### Inspect and Modify Component
 
-**Property modification**:
-- Always check current value with `getserializedproperties` first
-- Use correct value format for each type
-- Save scene after modifications to persist changes
+```
+1. getcomponents("Player")
+2. getserializedproperties("Player", "Rigidbody")
+3. setserializedproperty("Player", "Rigidbody", "m_Mass", "2.5")
+4. savescene()
+```
 
-**Component management**:
-- Use fully-qualified type names for `addcomponent`
-- Check for dependencies before adding components
-- Cannot remove Transform or other required components
+### Create and Configure GameObject
 
-**Performance**:
-- Batch property changes when possible
-- Use component index instead of name for repeated access
-- Save scene once after multiple changes
+```
+1. createobject("Enemy", "Enemies")
+2. addcomponent("Enemies/Enemy", "Rigidbody")
+3. addcomponent("Enemies/Enemy", "BoxCollider")
+4. setserializedproperty("Enemies/Enemy", "Rigidbody", "m_Mass", "1.5")
+5. savescene()
+```
+
+### Clone GameObject Configuration
+
+```
+1. getcomponents("SourceObject")
+2. getserializedproperties("SourceObject", "Rigidbody")
+3. createobject("ClonedObject")
+4. addcomponent("ClonedObject", "Rigidbody")
+5. setserializedproperty("ClonedObject", "Rigidbody", "m_Mass", "<value>")
+```
+
+---
+
+## Limitations
+
+**SerializedObject API**:
+- Only accesses serialized fields
+- Non-serialized properties require `runcode`
+- Some Unity types not fully supported
+
+**Property Modification**:
+- ObjectReference properties cannot be set via string
+- Complex nested structures may need `runcode`
+- Array/List modification limited
+
+**Workarounds**:
+```javascript
+// For non-serialized properties
+runcode("UnityEngine.GameObject.Find('Player').GetComponent<Rigidbody>()", 
+  "set_velocity", "new Vector3(1, 0, 0)")
+
+// For ObjectReference
+runcode("UnityEngine.GameObject.Find('Player').GetComponent<PlayerController>()", 
+  "set_weapon", "UnityEngine.GameObject.Find('Sword')")
+```
+
+---
+
+## Error Handling
+
+**GameObject not found**:
+```json
+{"error": "GameObject not found: InvalidName"}
+```
+→ Check name/path with `gethierarchy()`
+
+**Component not found**:
+```json
+{"error": "Component not found: InvalidComponent"}
+```
+→ Check available components with `getcomponents()`
+
+**Property not found**:
+```json
+{"error": "Property not found: invalidProperty"}
+```
+→ Check property names with `getserializedproperties()`
+
+**Invalid value format**:
+```json
+{"error": "Invalid value format for type float: abc"}
+```
+→ Check value format matches property type

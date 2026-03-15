@@ -74,8 +74,7 @@ namespace MCP4Unity.Editor
         
         Button startBtn;
         Label portLabel;
-        IntegerField portField;
-        Button portApplyBtn;
+        Button portRefreshBtn;
         VisualElement toolListContainer;
         VisualElement toolDetailsContainer;
         VisualElement historyContainer;
@@ -174,16 +173,11 @@ namespace MCP4Unity.Editor
             portLabel.style.marginLeft = 8;
             top.Add(portLabel);
             
-            // Port configuration field
-            portField = new IntegerField();
-            portField.value = MCPService.GetConfiguredPort();
-            portField.style.width = 60;
-            portField.style.marginLeft = 4;
-            top.Add(portField);
-            
-            portApplyBtn = new Button(OnApplyPort) { text = "Apply" };
-            portApplyBtn.style.marginLeft = 2;
-            top.Add(portApplyBtn);
+            // Port refresh button
+            portRefreshBtn = new Button(OnRefreshPort) { text = "Refresh Port" };
+            portRefreshBtn.style.marginLeft = 4;
+            portRefreshBtn.tooltip = "Reload port configuration from unity_config.json and restart service if changed";
+            top.Add(portRefreshBtn);
             
 
 
@@ -470,20 +464,33 @@ namespace MCP4Unity.Editor
             EditorPrefs.SetBool("MCP4Unity_Auto_Start", evt.newValue);
         }
         
-        void OnApplyPort()
+        void OnRefreshPort()
         {
-            int newPort = portField.value;
-            if (newPort < 1 || newPort > 65535)
+            int oldPort = MCPService.Inst.CurrentPort;
+            int newPort = MCPService.GetConfiguredPort();
+            
+            Debug.Log($"[MCPEditorWindow] Refreshing port config: old={oldPort}, new={newPort}");
+            
+            if (newPort != oldPort)
             {
-                UnityEngine.Debug.LogWarning($"Invalid port number: {newPort}. Must be 1-65535.");
-                return;
+                Debug.Log($"[MCPEditorWindow] Port changed from {oldPort} to {newPort}, restarting service...");
+                
+                if (MCPService.Inst.Running)
+                {
+                    MCPService.Inst.Stop();
+                    MCPService.Inst.Start();
+                    Debug.Log($"[MCPEditorWindow] Service restarted on port {newPort}");
+                }
+                else
+                {
+                    Debug.Log($"[MCPEditorWindow] Service not running, port will be used on next start");
+                }
             }
-            MCPService.SaveConfiguredPort(newPort);
-            if (MCPService.Inst.Running)
+            else
             {
-                MCPService.Inst.Stop();
-                MCPService.Inst.Start();
+                Debug.Log($"[MCPEditorWindow] Port unchanged ({newPort}), no restart needed");
             }
+            
             UpdateStartBtn();
         }
         
