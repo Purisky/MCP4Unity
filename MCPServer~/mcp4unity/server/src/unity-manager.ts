@@ -34,13 +34,17 @@ export class UnityManager {
     // 配置文件放在 Unity 项目根目录
     // 从当前工作目录向上查找 Unity 项目根目录
     const unityProjectRoot = this.findUnityProjectRoot(process.cwd());
+    if (!unityProjectRoot) {
+      throw new Error("Not in a Unity project directory. Please run from a Unity project or specify projectPath.");
+    }
     this.configFile = path.join(unityProjectRoot, "unity_config.json");
   }
 
   /**
-   * 查找 Unity 项目根目录（包含 Assets/ 和 ProjectSettings/ 的目录）
+   * 查找 Unity 项目根目录（包含 Assets/ 和 ProjectSettings/ 的目录，严格大小写）
+   * @returns Unity 项目根目录路径，如果未找到则返回 null
    */
-  private findUnityProjectRoot(startPath: string): string {
+  private findUnityProjectRoot(startPath: string): string | null {
     let currentPath = startPath;
     
     // 向上查找，直到找到 Unity 项目标志或到达根目录
@@ -48,16 +52,24 @@ export class UnityManager {
       const assetsDir = path.join(currentPath, "Assets");
       const projectSettingsDir = path.join(currentPath, "ProjectSettings");
       
-      // 检查是否同时存在 Assets 和 ProjectSettings 目录
+      // 检查是否同时存在 Assets 和 ProjectSettings 目录（严格大小写）
       if (fs.existsSync(assetsDir) && fs.existsSync(projectSettingsDir)) {
-        return currentPath;
+        // 验证大小写是否正确
+        try {
+          const files = fs.readdirSync(currentPath);
+          if (files.includes("Assets") && files.includes("ProjectSettings")) {
+            return currentPath;
+          }
+        } catch (error) {
+          // 忽略读取错误，继续向上查找
+        }
       }
       
       currentPath = path.dirname(currentPath);
     }
     
-    // 如果没找到 Unity 项目，返回当前工作目录
-    return process.cwd();
+    // 如果没找到 Unity 项目，返回 null
+    return null;
   }
 
   /**
@@ -91,6 +103,10 @@ export class UnityManager {
    */
   saveConfig(unityExePath: string, projectPath?: string, mcpPort?: number): void {
     const targetProjectPath = projectPath || this.findUnityProjectRoot(process.cwd());
+    
+    if (!targetProjectPath) {
+      throw new Error("Unity project not found. Please specify projectPath parameter or run from a Unity project directory.");
+    }
     
     // 加载现有配置以保留 mcpPort（如果已存在）
     const targetConfigFile = path.join(targetProjectPath, "unity_config.json");
