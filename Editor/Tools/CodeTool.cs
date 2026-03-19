@@ -79,13 +79,15 @@ namespace MCP
         }
         [Tool("读取Unity控制台日志")]
         public static string GetUnityConsoleLog(
-            [Desc("日志类型筛选: all(全部), error(仅错误), warning(仅警告), log(仅信息)")] string filter = "all",
+            [Desc("日志类型筛选: all(全部), error(仅错误), warning(仅警告), info(仅信息)")] string filter = "all",
             [Desc("是否折叠重复日志")] bool collapse = false,
-            [Desc("显示最近N条日志")] int maxCount = 10)
+            [Desc("显示最近N条日志(默认20)")] int count = 20)
         {
             try
             {
-                var logInfo = GetLogEntriesInfo(filter, collapse, maxCount);
+                if (string.IsNullOrEmpty(filter)) filter = "all";
+                if (count <= 0) count = 20;
+                var logInfo = GetLogEntriesInfo(filter, collapse, count);
                 return string.IsNullOrEmpty(logInfo) ? "📭 无匹配日志" : logInfo;
             }
             catch (System.Exception ex)
@@ -101,127 +103,111 @@ namespace MCP
                 var result = new System.Text.StringBuilder();
                 var logEntriesType = typeof(EditorWindow).Assembly.GetType("UnityEditor.LogEntries");
                 if (logEntriesType == null)
-                {
                     return "❌ 无法访问Unity日志系统";
-                }
 
-                var setConsoleFlagMethod = logEntriesType.GetMethod("SetConsoleFlag", 
-                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-                var getConsoleFlagsMethod = logEntriesType.GetMethod("get_consoleFlags", 
-                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-                
-                int originalFlags = 0;
-                if (getConsoleFlagsMethod != null)
-                {
-                    originalFlags = (int)getConsoleFlagsMethod.Invoke(null, null);
-                }
-
-                if (setConsoleFlagMethod != null)
-                {
-                    setConsoleFlagMethod.Invoke(null, new object[] { 0x80, true });
-                    setConsoleFlagMethod.Invoke(null, new object[] { 0x100, true });
-                    setConsoleFlagMethod.Invoke(null, new object[] { 0x200, true });
-                }
+                var logEntryType = typeof(EditorWindow).Assembly.GetType("UnityEditor.LogEntry");
+                if (logEntryType == null)
+                    return "❌ 无法访问日志条目类型";
 
                 var getCountMethod = logEntriesType.GetMethod("GetCount", 
                     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
                 var getEntryInternalMethod = logEntriesType.GetMethod("GetEntryInternal", 
                     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
+                var startMethod = logEntriesType.GetMethod("StartGettingEntries", 
+                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
+                var endMethod = logEntriesType.GetMethod("EndGettingEntries", 
+                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
                 
                 if (getCountMethod == null || getEntryInternalMethod == null)
-                {
                     return "❌ 无法访问日志方法";
-                }
 
                 int logCount = (int)getCountMethod.Invoke(null, null);
                 if (logCount == 0)
-                {
-                    if (setConsoleFlagMethod != null && getConsoleFlagsMethod != null)
-                    {
-                        setConsoleFlagMethod.Invoke(null, new object[] { 0x80, (originalFlags & 0x80) != 0 });
-                        setConsoleFlagMethod.Invoke(null, new object[] { 0x100, (originalFlags & 0x100) != 0 });
-                        setConsoleFlagMethod.Invoke(null, new object[] { 0x200, (originalFlags & 0x200) != 0 });
-                    }
                     return "📭 控制台暂无日志";
-                }
 
-                var logEntryType = typeof(EditorWindow).Assembly.GetType("UnityEditor.LogEntry");
-                if (logEntryType == null)
-                {
-                    return "❌ 无法访问日志条目类型";
-                }
+                // 必须调用 StartGettingEntries 才能读取日志内容
+                if (startMethod != null) startMethod.Invoke(null, null);
 
-                // 收集日志
-                var logs = new System.Collections.Generic.List<(int type, string message, string location)>();
-                var seenMessages = new System.Collections.Generic.HashSet<string>();
-                var typeCounts = new System.Collections.Generic.Dictionary<int, int>();
-                
-                for (int i = 0; i < logCount; i++)
+                try
                 {
-                    try
+                    var modeField = logEntryType.GetField("mode", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    var msgField = logEntryType.GetField("message", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    var fileField = logEntryType.GetField("file", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    var lineField = logEntryType.GetField("line", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+                    var logs = new System.Collections.Generic.List<(int type, string message, string location)>();
+                    var seenMessages = new System.Collections.Generic.HashSet<string>();
+                    int errorCount = 0, warningCount = 0, infoCount = 0;
+
+                    for (int i = 0; i < logCount; i++)
                     {
-                        var logEntry = System.Activator.CreateInstance(logEntryType);
-                        var parameters = new object[] { i, logEntry };
-                        
-                        bool success = (bool)getEntryInternalMethod.Invoke(null, parameters);
-                        if (!success || logEntry == null) continue;
+                        try
+                        {
+                            var logEntry = System.Activator.CreateInstance(logEntryType);
+                            bool success = (bool)getEntryInternalMethod.Invoke(null, new object[] { i, logEntry });
+                            if (!success) continue;
 
-                        int logType = GetLogTypeValue(logEntry, logEntryType, logEntriesType);
-                        
-                        if (!typeCounts.ContainsKey(logType))
-                            typeCounts[logType] = 0;
-                        typeCounts[logType]++;
-                        
-                        if (filter == "error" && logType != 0 && logType != 4) continue;
-                        if (filter == "warning" && logType != 2) continue;
-                        if (filter == "log" && logType != 3) continue;
+                            int mode = modeField != null ? (int)modeField.GetValue(logEntry) : 0;
+                            int logType;
+                            if ((mode & 0x100) != 0) logType = 0;      // Error
+                            else if ((mode & 0x200) != 0) logType = 2;  // Warning
+                            else logType = 3;                            // Info
 
-                        string message = GetLogMessage(logEntry, logEntryType);
-                        
-                        if (collapse && !seenMessages.Add(message)) continue;
+                            // 统计
+                            if (logType == 0) errorCount++;
+                            else if (logType == 2) warningCount++;
+                            else infoCount++;
 
-                        string location = GetLogLocation(logEntry, logEntryType);
-                        logs.Add((logType, message, location));
+                            // 筛选
+                            if (filter == "error" && logType != 0) continue;
+                            if (filter == "warning" && logType != 2) continue;
+                            if (filter == "info" && logType != 3) continue;
+
+                            // 读取消息（只取第一行，去掉堆栈）
+                            string fullMsg = msgField?.GetValue(logEntry)?.ToString() ?? "";
+                            string message = fullMsg;
+                            int newlineIdx = fullMsg.IndexOf('\n');
+                            if (newlineIdx > 0) message = fullMsg.Substring(0, newlineIdx);
+
+                            if (collapse && !seenMessages.Add(message)) continue;
+
+                            // 位置
+                            string file = fileField?.GetValue(logEntry)?.ToString() ?? "";
+                            int line = lineField != null ? (int)(lineField.GetValue(logEntry) ?? 0) : 0;
+                            string location = "";
+                            if (!string.IsNullOrEmpty(file) && line > 0)
+                                location = $" [{System.IO.Path.GetFileName(file)}:{line}]";
+                            else if (!string.IsNullOrEmpty(file))
+                                location = $" [{System.IO.Path.GetFileName(file)}]";
+
+                            logs.Add((logType, message, location));
+                        }
+                        catch { continue; }
                     }
-                    catch
+
+                    result.AppendLine($"📊 日志统计: ❌错误 {errorCount} | ⚠️警告 {warningCount} | 🟢信息 {infoCount}");
+
+                    if (logs.Count == 0)
+                        return result.ToString() + $"\n📭 无匹配日志 (筛选: {filter})";
+
+                    int startIndex = System.Math.Max(0, logs.Count - maxCount);
+                    int displayCount = logs.Count - startIndex;
+                    result.AppendLine($"匹配 {logs.Count} 条 (筛选: {filter}, 折叠: {collapse})\n");
+
+                    for (int i = startIndex; i < logs.Count; i++)
                     {
-                        continue;
+                        var (type, message, location) = logs[i];
+                        string icon = GetLogTypeIcon(type);
+                        result.AppendLine($"{icon}{location}: {message}");
                     }
-                }
 
-                int errorCount = (typeCounts.ContainsKey(0) ? typeCounts[0] : 0) + (typeCounts.ContainsKey(4) ? typeCounts[4] : 0);
-                int warningCount = typeCounts.ContainsKey(2) ? typeCounts[2] : 0;
-                int logInfoCount = typeCounts.ContainsKey(3) ? typeCounts[3] : 0;
-                
-                result.AppendLine($"📊 日志统计: ❌错误 {errorCount} | ⚠️警告 {warningCount} | 🟢信息 {logInfoCount}");
-                
-                if (logs.Count == 0)
-                {
-                    return result.ToString() + $"\n📭 无匹配日志 (筛选: {filter})";
+                    result.AppendLine($"\n显示了最近 {displayCount} 条日志");
+                    return result.ToString();
                 }
-
-                int startIndex = System.Math.Max(0, logs.Count - maxCount);
-                int displayCount = logs.Count - startIndex;
-                
-                result.AppendLine($"匹配 {logs.Count} 条 (筛选: {filter}, 折叠: {collapse})\n");
-                
-                for (int i = startIndex; i < logs.Count; i++)
+                finally
                 {
-                    var (type, message, location) = logs[i];
-                    string typeIcon = GetLogTypeIcon(type);
-                    result.AppendLine($"{typeIcon}{location}: {message}");
+                    if (endMethod != null) endMethod.Invoke(null, null);
                 }
-
-                result.AppendLine($"\n显示了最近 {displayCount} 条日志");
-                
-                if (setConsoleFlagMethod != null && getConsoleFlagsMethod != null)
-                {
-                    setConsoleFlagMethod.Invoke(null, new object[] { 0x80, (originalFlags & 0x80) != 0 });
-                    setConsoleFlagMethod.Invoke(null, new object[] { 0x100, (originalFlags & 0x100) != 0 });
-                    setConsoleFlagMethod.Invoke(null, new object[] { 0x200, (originalFlags & 0x200) != 0 });
-                }
-                
-                return result.ToString();
             }
             catch (System.Exception ex)
             {
@@ -232,49 +218,17 @@ namespace MCP
 
         private static int GetLogTypeValue(object logEntry, System.Type logEntryType, System.Type logEntriesType)
         {
-            // 先获取消息内容
-            var conditionField = logEntryType.GetField("condition", 
-                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            string message = conditionField?.GetValue(logEntry)?.ToString() ?? "";
-            
-            // 编译器警告判断
-            if (!string.IsNullOrEmpty(message) && message.Contains(": warning CS"))
-                return 2;
-            
-            var fileField = logEntryType.GetField("file", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            string file = fileField?.GetValue(logEntry)?.ToString() ?? "";
-            
-            // MCP 内部日志
-            if (file.IndexOf("MCPService.cs", System.StringComparison.Ordinal) >= 0 || 
-                file.IndexOf("Watcher.cs", System.StringComparison.Ordinal) >= 0)
-                return 3;
-            
-            // 使用 Unity Console 的 HasMode 方法判断日志类型
-            var hasModeMethod = logEntriesType.GetMethod("HasMode", 
-                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-            
-            int detectedType = 3;
-            if (hasModeMethod != null)
+            var modeField = logEntryType.GetField("mode", 
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            if (modeField != null)
             {
-                var modeField = logEntryType.GetField("mode", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                if (modeField != null)
-                {
-                    int mode = (int)modeField.GetValue(logEntry);
-                    
-                    if ((bool)hasModeMethod.Invoke(null, new object[] { mode, 0x200 }))
-                        detectedType = 3;
-                    else if ((bool)hasModeMethod.Invoke(null, new object[] { mode, 0x100 }))
-                        detectedType = 2;
-                    else if ((bool)hasModeMethod.Invoke(null, new object[] { mode, 0x80 }))
-                        detectedType = 0;
-                }
+                int mode = (int)modeField.GetValue(logEntry);
+                // Unity 6 mode flags: 0x100=Error, 0x200=Warning, 0x400=Log
+                if ((mode & 0x100) != 0) return 0; // Error
+                if ((mode & 0x200) != 0) return 2; // Warning
+                if ((mode & 0x400) != 0) return 3; // Log/Info
             }
-            
-            // 异常检测：如果消息包含 Exception，强制标记为错误
-            if (detectedType == 3 && !string.IsNullOrEmpty(message) && message.Contains("Exception"))
-                return 0;
-            
-            return detectedType;
+            return 3; // fallback to info
         }
         
         private static string GetLogCallstack(object logEntry, System.Type logEntryType)
@@ -313,8 +267,8 @@ namespace MCP
 
         private static string GetLogMessage(object logEntry, System.Type logEntryType)
         {
-            // 尝试多种可能的消息字段名
-            string[] messageFields = { "condition", "message", "text", "content" };
+            // Unity 6 使用 "message" 字段
+            string[] messageFields = { "message", "condition", "text", "content" };
             
             foreach (var fieldName in messageFields)
             {
@@ -398,6 +352,15 @@ namespace MCP
             }
             return "";
         }
+        [Tool("生成测试日志（用于验证日志分类）")]
+        public static string EmitTestLogs()
+        {
+            UnityEngine.Debug.Log("🧪 测试信息日志 (Info)");
+            UnityEngine.Debug.LogWarning("🧪 测试警告日志 (Warning)");
+            UnityEngine.Debug.LogError("🧪 测试错误日志 (Error)");
+            return "✅ 已生成 3 条测试日志 (Info/Warning/Error)，使用 GetUnityConsoleLog 查看";
+        }
+
         [Tool("刷新 MCP 工具列表")]
         public static string RefreshTools()
         {
