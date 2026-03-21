@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using UnityEditor;
 using UnityEditor.Compilation;
+using UnityEditor.Build;
 
 namespace MCP
 {
@@ -13,6 +14,9 @@ namespace MCP
         [Tool("重新编译程序集，等待编译完成后返回编译结果和错误信息")]
         public static async Task<string> RecompileAssemblies()
         {
+            // 先刷新 AssetDatabase，确保外部新增/修改的文件被 Unity 识别
+            AssetDatabase.Refresh();
+            
             var tcs = new TaskCompletionSource<bool>();
             var errors = new List<CompilerMessage>();
             var warnings = new List<CompilerMessage>();
@@ -453,6 +457,126 @@ namespace MCP
             catch (System.Exception ex)
             {
                 return $"执行方法时发生错误: {ex.Message}";
+            }
+        }
+
+        [Tool("执行 Unity 编辑器菜单命令")]
+        public static string ExecuteMenuItem(
+            [Desc("菜单路径，如 'File/Save Project'、'Assets/Refresh'、'Window/General/Console'")] string menuPath)
+        {
+            try
+            {
+                bool success = EditorApplication.ExecuteMenuItem(menuPath);
+                if (success)
+                    return $"✅ 已执行: {menuPath}";
+                else
+                    return $"❌ 菜单项不存在或无法执行: {menuPath}";
+            }
+            catch (System.Exception ex)
+            {
+                return $"❌ 执行菜单命令时发生错误: {ex.Message}";
+            }
+        }
+
+        [Tool("获取当前平台的脚本宏定义（Scripting Define Symbols）")]
+        public static string GetDefines()
+        {
+            try
+            {
+                var buildTargetGroup = EditorUserBuildSettings.selectedBuildTargetGroup;
+                var namedBuildTarget = NamedBuildTarget.FromBuildTargetGroup(buildTargetGroup);
+                string defines = PlayerSettings.GetScriptingDefineSymbols(namedBuildTarget);
+
+                if (string.IsNullOrEmpty(defines))
+                    return "当前无自定义宏定义";
+
+                var result = new System.Text.StringBuilder();
+                result.AppendLine($"平台: {buildTargetGroup}");
+                result.AppendLine("宏定义:");
+
+                var symbolList = defines.Split(';');
+                foreach (var symbol in symbolList)
+                {
+                    if (!string.IsNullOrWhiteSpace(symbol))
+                        result.AppendLine($"  {symbol.Trim()}");
+                }
+
+                return result.ToString();
+            }
+            catch (System.Exception ex)
+            {
+                return $"❌ 获取宏定义时发生错误: {ex.Message}";
+            }
+        }
+
+        [Tool("设置当前平台的脚本宏定义（Scripting Define Symbols）")]
+        public static string SetDefines(
+            [Desc("宏定义列表，分号分隔，如 'ENABLE_DEBUG;USE_ADDRESSABLES;MY_FEATURE'")] string defines,
+            [Desc("操作模式: set(替换全部), add(追加), remove(移除指定项)")] string mode = "set")
+        {
+            try
+            {
+                var buildTargetGroup = EditorUserBuildSettings.selectedBuildTargetGroup;
+                var namedBuildTarget = NamedBuildTarget.FromBuildTargetGroup(buildTargetGroup);
+                
+                string currentDefines = PlayerSettings.GetScriptingDefineSymbols(namedBuildTarget);
+                var currentList = string.IsNullOrEmpty(currentDefines) 
+                    ? new List<string>() 
+                    : currentDefines.Split(';').Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
+
+                var newList = defines.Split(';').Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
+                var resultList = new List<string>();
+
+                if (mode == "set")
+                {
+                    resultList = newList;
+                }
+                else if (mode == "add")
+                {
+                    resultList = currentList;
+                    foreach (var symbol in newList)
+                    {
+                        if (!resultList.Contains(symbol))
+                            resultList.Add(symbol);
+                    }
+                }
+                else if (mode == "remove")
+                {
+                    resultList = currentList;
+                    foreach (var symbol in newList)
+                    {
+                        resultList.Remove(symbol);
+                    }
+                }
+                else
+                {
+                    return $"❌ 未知的操作模式: {mode}，支持: set, add, remove";
+                }
+
+                string newDefinesStr = string.Join(";", resultList);
+                PlayerSettings.SetScriptingDefineSymbols(namedBuildTarget, newDefinesStr);
+
+                var result = new System.Text.StringBuilder();
+                result.AppendLine($"✅ 宏定义已更新 (模式: {mode})");
+                result.AppendLine($"\n操作前:");
+                if (currentList.Count == 0)
+                    result.AppendLine("  (无)");
+                else
+                    foreach (var symbol in currentList)
+                        result.AppendLine($"  {symbol}");
+
+                result.AppendLine($"\n操作后:");
+                if (resultList.Count == 0)
+                    result.AppendLine("  (无)");
+                else
+                    foreach (var symbol in resultList)
+                        result.AppendLine($"  {symbol}");
+
+                return result.ToString();
+            }
+            catch (System.Exception ex)
+            {
+                return $"❌ 设置宏定义时发生错误: {ex.Message}";
             }
         }
     }

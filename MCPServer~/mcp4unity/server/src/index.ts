@@ -54,6 +54,33 @@ const MANAGEMENT_TOOLS: Tool[] = [
     },
   },
   {
+    name: "runtests",
+    description: "Run Unity EditMode/PlayMode tests in batchmode and return structured summary",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectPath: {
+          type: "string",
+          description: "Path to Unity project (optional, auto-detects from current directory)",
+        },
+        testMode: {
+          type: "string",
+          description: "Test mode: EditMode or PlayMode",
+          enum: ["EditMode", "PlayMode"],
+        },
+        testFilter: {
+          type: "string",
+          description: "Optional test filter (class name or method name)",
+        },
+        testCategory: {
+          type: "string",
+          description: "Optional test category filter",
+        },
+      },
+      required: ["testMode"],
+    },
+  },
+  {
     name: "stopunity",
     description: "Force close Unity",
     inputSchema: {
@@ -187,6 +214,15 @@ async function handleManagementTool(
     case "runbatchmode": {
       const projectPath = args.projectPath as string | undefined;
       const output = unityManager.runBatchMode(projectPath);
+      return output;
+    }
+
+    case "runtests": {
+      const projectPath = args.projectPath as string | undefined;
+      const testMode = args.testMode as string;
+      const testFilter = args.testFilter as string | undefined;
+      const testCategory = args.testCategory as string | undefined;
+      const output = unityManager.runTests(projectPath, testMode, testFilter, testCategory);
       return output;
     }
 

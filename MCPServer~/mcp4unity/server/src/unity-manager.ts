@@ -33,6 +33,20 @@ export interface UnityStatusDetail {
   batchMode: boolean;
 }
 
+interface FailedTestCase {
+  name: string;
+  message: string;
+}
+
+interface ParsedTestResults {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  duration: number;
+  failedTests: FailedTestCase[];
+}
+
 export class UnityManager {
   private multiConfig: UnityMultiConfig | null = null;
   private configFile: string | null = null;
@@ -654,6 +668,243 @@ export class UnityManager {
 
     // 解析编译结果
     return this.parseBatchModeOutput(rawOutput, exitCode, logFile);
+  }
+
+  /**
+   * 运行 Unity Test Runner（EditMode/PlayMode）
+   * 返回结构化测试结果
+   */
+  runTests(projectPath: string | undefined, testMode: string, testFilter?: string, testCategory?: string): string {
+    const targetProjectPath = this.getProjectPath(projectPath);
+    const config = this.getProjectConfig(targetProjectPath);
+
+    if (!config.unityExePath) {
+      throw new Error("Unity path not configured. Run configureunity first.");
+    }
+
+    if (!fs.existsSync(config.unityExePath)) {
+      throw new Error(`Unity executable not found: ${config.unityExePath}`);
+    }
+
+    if (testMode !== "EditMode" && testMode !== "PlayMode") {
+      throw new Error(`Invalid testMode: ${testMode}. Must be EditMode or PlayMode.`);
+    }
+
+    const logDir = path.join(targetProjectPath, "Logs");
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+
+    const testOutputDir = path.join(targetProjectPath, "TestOutput");
+    if (!fs.existsSync(testOutputDir)) {
+      fs.mkdirSync(testOutputDir, { recursive: true });
+    }
+
+    const logFile = path.join(logDir, "test.log");
+    const testResultsFile = path.join(testOutputDir, "results.xml");
+
+    if (fs.existsSync(testResultsFile)) {
+      fs.rmSync(testResultsFile, { force: true });
+    }
+
+    const commandParts = [
+      `"${config.unityExePath}"`,
+      "-batchmode",
+      `-projectPath "${targetProjectPath}"`,
+      "-runTests",
+      `-testPlatform ${testMode}`,
+      `-testResults "${testResultsFile}"`,
+      `-logFile "${logFile}"`,
+    ];
+
+    if (testFilter && testFilter.trim().length > 0) {
+      commandParts.push(`-testFilter "${testFilter}"`);
+    }
+
+    if (testCategory && testCategory.trim().length > 0) {
+      commandParts.push(`-testCategory "${testCategory}"`);
+    }
+
+    const command = commandParts.join(" ");
+    let exitCode = 0;
+
+    try {
+      execSync(command, {
+        encoding: "utf-8",
+        timeout: 600000,
+        stdio: "ignore",
+      });
+    } catch (error: unknown) {
+      const execError = error as { status?: number };
+      exitCode = execError.status || 1;
+      // 测试失败时 Unity 通常返回非 0，继续解析 XML 和日志
+    }
+
+    let rawOutput = "";
+    if (fs.existsSync(logFile)) {
+      rawOutput = fs.readFileSync(logFile, "utf-8");
+    }
+
+    if (!fs.existsSync(testResultsFile)) {
+      const logHint = rawOutput
+        ? "\n\n⚠️ 可查看 test.log 获取详细失败原因"
+        : "";
+      throw new Error(`Test results file not found: ${testResultsFile}${logHint}`);
+    }
+
+    const xmlContent = fs.readFileSync(testResultsFile, "utf-8");
+    const parsedResults = this.parseTestResultsXml(xmlContent);
+
+    return this.formatTestRunOutput(
+      parsedResults,
+      exitCode,
+      testMode,
+      testFilter,
+      testCategory,
+      logFile,
+      testResultsFile
+    );
+  }
+
+  /**
+   * 解析 Unity Test Runner 输出的 XML
+   */
+  private parseTestResultsXml(xmlContent: string): ParsedTestResults {
+    const testRunMatch = xmlContent.match(/<test-run\b[^>]*>/i);
+    if (!testRunMatch) {
+      throw new Error("Invalid test results XML: missing <test-run> root element.");
+    }
+
+    const testRunTag = testRunMatch[0];
+
+    const total = this.parseNumericAttribute(testRunTag, "total") ?? 0;
+    const passed = this.parseNumericAttribute(testRunTag, "passed") ?? 0;
+    const failed = this.parseNumericAttribute(testRunTag, "failed") ?? 0;
+    const skipped = this.parseNumericAttribute(testRunTag, "skipped") ?? 0;
+    const duration = this.parseNumericAttribute(testRunTag, "duration") ?? 0;
+
+    const failedTests: FailedTestCase[] = [];
+    const failedCaseRegex = /<test-case\b[^>]*\bresult="Failed"[^>]*>[\s\S]*?<\/test-case>/gi;
+    const failedCaseBlocks = xmlContent.match(failedCaseRegex) ?? [];
+
+    for (const testCaseBlock of failedCaseBlocks) {
+      const openTagMatch = testCaseBlock.match(/<test-case\b[^>]*>/i);
+      const openTag = openTagMatch?.[0] ?? "";
+      const name = this.parseStringAttribute(openTag, "name") ?? "UnknownTest";
+
+      const cdataMessageMatch = testCaseBlock.match(/<message><!\[CDATA\[([\s\S]*?)\]\]><\/message>/i);
+      const plainMessageMatch = cdataMessageMatch
+        ? null
+        : testCaseBlock.match(/<message>([\s\S]*?)<\/message>/i);
+
+      const rawMessage = cdataMessageMatch?.[1] ?? plainMessageMatch?.[1] ?? "No failure message";
+      const message = this.decodeXmlEntities(rawMessage).trim();
+
+      failedTests.push({
+        name,
+        message: message.length > 0 ? message : "No failure message",
+      });
+    }
+
+    return {
+      total,
+      passed,
+      failed,
+      skipped,
+      duration,
+      failedTests,
+    };
+  }
+
+  /**
+   * 格式化测试运行结果（风格对齐 parseBatchModeOutput）
+   */
+  private formatTestRunOutput(
+    results: ParsedTestResults,
+    exitCode: number,
+    testMode: string,
+    testFilter: string | undefined,
+    testCategory: string | undefined,
+    logFilePath: string,
+    resultsFilePath: string
+  ): string {
+    const success = exitCode === 0 && results.failed === 0;
+    const shownFailedTests = results.failedTests.slice(0, 20);
+
+    let output = "";
+
+    if (success) {
+      output += "✅ 测试通过\n\n";
+    } else {
+      output += "❌ 测试失败\n\n";
+    }
+
+    output += "📊 统计:\n";
+    output += `  - 模式: ${testMode}\n`;
+    if (testFilter && testFilter.trim().length > 0) {
+      output += `  - Filter: ${testFilter}\n`;
+    }
+    if (testCategory && testCategory.trim().length > 0) {
+      output += `  - Category: ${testCategory}\n`;
+    }
+    output += `  - Total: ${results.total}\n`;
+    output += `  - Passed: ${results.passed}\n`;
+    output += `  - Failed: ${results.failed}\n`;
+    output += `  - Skipped: ${results.skipped}\n`;
+    output += `  - Duration: ${results.duration.toFixed(3)}s\n`;
+    output += `  - ExitCode: ${exitCode}\n\n`;
+
+    if (shownFailedTests.length > 0) {
+      output += `🔴 失败测试 (显示前 ${shownFailedTests.length} 条):\n\n`;
+      shownFailedTests.forEach((test, idx) => {
+        output += `${idx + 1}. ${test.name}\n`;
+        output += `   ${test.message}\n\n`;
+      });
+
+      if (results.failedTests.length > 20) {
+        output += `⚠️  还有 ${results.failedTests.length - 20} 条失败测试未显示\n\n`;
+      }
+    }
+
+    output += `📄 测试结果 XML: ${resultsFilePath}\n`;
+    output += `📄 运行日志: ${logFilePath}\n`;
+
+    return output;
+  }
+
+  /**
+   * 从标签中解析字符串属性
+   */
+  private parseStringAttribute(tagContent: string, attributeName: string): string | null {
+    const escapedName = attributeName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(`\\b${escapedName}="([^"]*)"`, "i");
+    const match = tagContent.match(regex);
+    return match?.[1] ?? null;
+  }
+
+  /**
+   * 从标签中解析数字属性（支持整数和小数）
+   */
+  private parseNumericAttribute(tagContent: string, attributeName: string): number | null {
+    const rawValue = this.parseStringAttribute(tagContent, attributeName);
+    if (rawValue === null) {
+      return null;
+    }
+
+    const parsed = Number(rawValue);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  /**
+   * 简单 XML 实体解码（满足测试失败消息展示）
+   */
+  private decodeXmlEntities(text: string): string {
+    return text
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&")
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'");
   }
 
   /**
